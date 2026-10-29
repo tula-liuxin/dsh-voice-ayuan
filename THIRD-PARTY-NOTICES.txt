@@ -1,0 +1,6 @@
+This package depends on qwen-audio-agent (Apache License 2.0),
+https://github.com/QwenAudio/qwen-audio-agent
+
+client.js bundles its gateway client SDK. qwen-audio-agent is not modified
+except by the documented runtime patch in deploy/patch-vad.py, which is
+applied to a separately installed Python package, not to this repository.

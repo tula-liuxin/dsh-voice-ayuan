@@ -1,0 +1,16 @@
+# voice-ayuan：语音通话插件。
+# 服务器地址等私有配置请在 profile 的 cordis.patch.yml 里用同名 id 覆盖，
+# 不要写进这个公开包。
+- insert:
+    - id: voice-ayuan
+      name: '@local/voice-ayuan'
+      config:
+        remote:
+          host: 127.0.0.1        # 用 SSH 隧道时填远端主机
+          port: 22
+          user: your-user
+          unit: speech-to-speech.service
+          tunnelLocalPort: 18765
+          remotePort: 8765
+        gateway:
+          allowedOrigin: http://127.0.0.1:7969
