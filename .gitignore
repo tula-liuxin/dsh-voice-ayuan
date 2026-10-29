@@ -1,3 +1,7 @@
 node_modules/
-*.log
-.DS_Store
+client.js.bak-*
+*.bak-*
+deploy/out/
+.build-check.mjs
+.chk.mjs
+.client-check.js

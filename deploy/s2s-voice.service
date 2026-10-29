@@ -1,0 +1,18 @@
+[Unit]
+Description=voice-ayuan speech-to-speech realtime server (ws://127.0.0.1:8765/v1/realtime)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=%h/co-dir/voice-ayuan
+ExecStart=%h/co-dir/voice-ayuan/scripts/start.sh
+Restart=always
+RestartSec=10
+KillMode=mixed
+TimeoutStopSec=60
+LimitNOFILE=65536
+
+[Install]
+WantedBy=default.target
