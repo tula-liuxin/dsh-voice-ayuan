@@ -1,6 +1,5 @@
 import { GatewayClient } from 'qwen-audio-agent/gateway-client-sdk'
 
-
 function b64encode(int16) {
   const bytes = new Uint8Array(int16.buffer, int16.byteOffset, int16.byteLength)
   let binary = ''
@@ -11,7 +10,7 @@ function b64encode(int16) {
   return btoa(binary)
 }
 
-function b64decodeToFloat32(b64, sampleRate = 24000) {
+function b64decodeToFloat32(b64) {
   const binary = atob(b64)
   const bytes = new Uint8Array(binary.length)
   for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i)
@@ -22,7 +21,14 @@ function b64decodeToFloat32(b64, sampleRate = 24000) {
 }
 
 function downmixTo16k(samples, inputRate) {
-  if (inputRate === 16000) return samples
+  if (inputRate === 16000) {
+    const out = new Int16Array(samples.length)
+    for (let i = 0; i < samples.length; i += 1) {
+      const v = Math.max(-1, Math.min(1, samples[i]))
+      out[i] = v < 0 ? v * 0x8000 : v * 0x7fff
+    }
+    return out
+  }
   const ratio = inputRate / 16000
   const outLength = Math.floor(samples.length / ratio)
   const out = new Int16Array(outLength)
@@ -48,75 +54,58 @@ class CaptureProcessor extends AudioWorkletProcessor {
 registerProcessor('voice-ayuan-capture', CaptureProcessor)
 `
 
+const BUBBLE_KEY = 'ayuan.bubble-position.v2'
+
+function bubbleFallback() {
+  try {
+    const raw = localStorage.getItem(BUBBLE_KEY)
+    if (!raw) return null
+    const p = JSON.parse(raw)
+    if (!Number.isFinite(p && p.rx) || !Number.isFinite(p && p.ry)) return null
+    const clamp = (n) => Math.max(0, Math.min(1, Number(n) || 0))
+    const size = window.matchMedia && window.matchMedia('(pointer:coarse)').matches ? 44 : 42
+    const y = Math.max(40, Math.min(innerHeight - size - 8, 40 + clamp(p.ry) * Math.max(1, innerHeight - size - 48)))
+    const dock = ['left', 'right'].includes(p.dock) ? p.dock : null
+    const x = dock === 'left' ? -size / 2 : dock === 'right' ? innerWidth - size / 2 : 8 + clamp(p.rx) * Math.max(0, innerWidth - size - 16)
+    return { x, y, size }
+  } catch {
+    return null
+  }
+}
+
+function forwardPointer(type, source, target, buttons) {
+  if (!target) return
+  try {
+    target.dispatchEvent(new PointerEvent(type, {
+      bubbles: true, cancelable: true, composed: true,
+      pointerId: source.pointerId, pointerType: source.pointerType || 'mouse',
+      isPrimary: true, clientX: source.clientX, clientY: source.clientY,
+      button: type === 'pointermove' ? -1 : 0, buttons: buttons ?? (type === 'pointerup' ? 0 : 1),
+    }))
+  } catch {}
+}
+
 function VoicePanel({ onClose, React, h, anchor }) {
-  const { useEffect, useRef, useState } = React
-  const [state, setState] = useState('connecting')
-  const [detail, setDetail] = useState('')
-  const [caption, setCaption] = useState('')
+  const { useEffect, useRef } = React
+  const [state, setState] = React.useState('connecting')
+  const [mic, setMic] = React.useState('opening')
+  const [detail, setDetail] = React.useState('')
+  const [caption, setCaption] = React.useState('')
   const clientRef = useRef(null)
-  const audioRef = useRef({ ctx: null, queue: [], playing: false, rate: 24000 })
+  const audioRef = useRef({ ctx: null, rate: 24000 })
   const streamRef = useRef(null)
+
+  useEffect(() => {
+    const onKey = (event) => { if (event.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
 
   useEffect(() => {
     let disposed = false
     const audio = audioRef.current
 
-    async function start() {
-      const res = await fetch('/voice-ayuan/status', { cache: 'no-store' })
-      const text = await res.text()
-      let status = {}
-      try { status = text ? JSON.parse(text) : {} } catch { status = {} }
-      if (!res.ok || !status.ok || !status.origin) {
-        setState('error')
-        setDetail(status.error || (res.ok ? 'Gateway 未就绪，请先启动语音服务' : '宿主插件未加载（重启 DSH 后再试）'))
-        return
-      }
-      const wsUrl = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/voice-ayuan/rt'
-      const client = new GatewayClient({
-        url: wsUrl,
-        createSocket: (url) => new WebSocket(url),
-        clientType: 'web',
-        clientVersion: '0.1.0',
-        clientInstanceId: 'voice-ayuan-' + Math.random().toString(36).slice(2),
-        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-        capabilities: ['input.audio', 'session.output_voice'],
-        onStatus: (s) => { if (!disposed) setState(s?.state || 'connecting') },
-        onEvent: (event) => {
-          if (disposed || !event) return
-          if (event.type === 'response.output_audio.delta' && event.delta) {
-            playPcm(b64decodeToFloat32(event.delta, audio.rate))
-          } else if (event.type === 'response.output_audio_transcript.delta' && event.delta) {
-            setCaption((c) => (c + event.delta).slice(-120))
-          } else if (event.type === 'error') {
-            setDetail(JSON.stringify(event).slice(0, 200))
-          }
-        },
-      })
-      clientRef.current = client
-      client.start()
-      await startMic(client)
-      if (!disposed) setState('live')
-    }
-
-    async function startMic(client) {
-      const ctx = new AudioContext()
-      audio.ctx = ctx
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-      })
-      streamRef.current = stream
-      const blob = new Blob([WORKLET], { type: 'application/javascript' })
-      await ctx.audioWorklet.addModule(URL.createObjectURL(blob))
-      const source = ctx.createMediaStreamSource(stream)
-      const node = new AudioWorkletNode(ctx, 'voice-ayuan-capture')
-      node.port.onmessage = (event) => {
-        const pcm = downmixTo16k(event.data, ctx.sampleRate)
-        client.send({ type: 'input_audio_buffer.append', audio: b64encode(pcm) })
-      }
-      source.connect(node)
-    }
-
-    function playPcm(float32) {
+    const playPcm = (float32) => {
       const ctx = audio.ctx
       if (!ctx) return
       const buffer = ctx.createBuffer(1, float32.length, audio.rate)
@@ -127,6 +116,79 @@ function VoicePanel({ onClose, React, h, anchor }) {
       source.start()
     }
 
+    const startMic = async (client) => {
+      const ctx = new AudioContext()
+      audio.ctx = ctx
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      })
+      streamRef.current = stream
+      const send = (float32) => {
+        const pcm = downmixTo16k(float32, ctx.sampleRate)
+        client.send({ type: 'input_audio_buffer.append', audio: b64encode(pcm) })
+      }
+      if (ctx.state === 'suspended') { try { await ctx.resume() } catch {} }
+      const source = ctx.createMediaStreamSource(stream)
+      try {
+        const url = URL.createObjectURL(new Blob([WORKLET], { type: 'application/javascript' }))
+        await ctx.audioWorklet.addModule(url)
+        URL.revokeObjectURL(url)
+        const node = new AudioWorkletNode(ctx, 'voice-ayuan-capture')
+        node.port.onmessage = (event) => send(event.data)
+        source.connect(node)
+      } catch {
+        const node = ctx.createScriptProcessor(4096, 1, 1)
+        const mute = ctx.createGain()
+        mute.gain.value = 0
+        node.onaudioprocess = (event) => send(event.inputBuffer.getChannelData(0))
+        source.connect(node)
+        node.connect(mute)
+        mute.connect(ctx.destination)
+      }
+    }
+
+    const start = async () => {
+      const res = await fetch('/voice-ayuan/status', { cache: 'no-store' })
+      const text = await res.text()
+      let status = {}
+      try { status = text ? JSON.parse(text) : {} } catch { status = {} }
+      if (!res.ok || !status.ok || !status.origin) {
+        setState('error')
+        setDetail(status.error || (res.ok ? '语音服务未就绪，先在插件里启动服务' : '宿主插件未加载（重启 DSH 后再试）'))
+        return
+      }
+      const wsUrl = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/voice-ayuan/rt'
+      const client = new GatewayClient({
+        url: wsUrl,
+        createSocket: (url) => new WebSocket(url),
+        clientType: 'web',
+        clientVersion: '0.1.2',
+        clientInstanceId: 'voice-ayuan-' + Math.random().toString(36).slice(2),
+        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        capabilities: ['input.audio', 'session.output_voice'],
+        onStatus: (s) => { if (disposed) return; const st = (s && s.state) || 'connecting'; if (st === 'ready') setState('ready'); else if (st === 'closed' || st === 'error') setState('error'); else if (st === 'connecting') setState('connecting') },
+        onEvent: (event) => {
+          if (disposed || !event) return
+          if (event.type === 'response.output_audio.delta' && event.delta) {
+            playPcm(b64decodeToFloat32(event.delta))
+          } else if (event.type === 'response.output_audio_transcript.delta' && event.delta) {
+            setCaption((c) => (c + event.delta).slice(-120))
+          } else if (event.type === 'error') {
+            setDetail(JSON.stringify(event).slice(0, 200))
+          }
+        },
+      })
+      clientRef.current = client
+      client.start()
+      try {
+        await startMic(client)
+        if (!disposed) { setMic('on'); setState('live') }
+      } catch (error) {
+        if (!disposed) { setMic('error'); setState('error') }
+        setDetail('麦克风不可用：' + String(error).slice(0, 160))
+      }
+    }
+
     start().catch((error) => {
       setState('error')
       setDetail(String(error).slice(0, 200))
@@ -134,41 +196,47 @@ function VoicePanel({ onClose, React, h, anchor }) {
 
     return () => {
       disposed = true
-      try { clientRef.current?.stop?.() } catch {}
-      try { streamRef.current?.getTracks?.().forEach((t) => t.stop()) } catch {}
-      try { audio.ctx?.close?.() } catch {}
+      try { clientRef.current && clientRef.current.stop && clientRef.current.stop() } catch {}
+      try { streamRef.current && streamRef.current.getTracks && streamRef.current.getTracks().forEach((t) => t.stop()) } catch {}
+      try { audio.ctx && audio.ctx.close && audio.ctx.close() } catch {}
     }
   }, [])
 
-  const dot = state === 'live' ? '#2ea043' : state === 'error' ? '#d1242f' : '#bf8700'
-  const panelStyle = {
-    position: 'fixed', width: 320, zIndex: 9999,
+  const dot = state === 'live' ? '#2ea043' : state === 'error' ? '#f85149' : '#d29922'
+  const label = state === 'live' ? '通话中' : state === 'error' ? '连接失败' : state === 'ready' ? '已连接，等待麦克风…' : '连接中…'
+  const style = {
+    position: 'fixed', width: 320, zIndex: 10000, pointerEvents: 'auto',
     background: 'var(--dsw-alias-bg-layer-2, #2a2e35)',
     color: 'var(--dsw-alias-label-primary, #e6edf3)',
     border: '1px solid var(--dsw-alias-border-l2, #3a3f45)', borderRadius: 14,
     boxShadow: '0 12px 32px rgba(0,0,0,.45)', padding: 16, fontSize: 13,
-    backdropFilter: 'blur(10px)',
   }
   if (anchor) {
-    panelStyle.left = Math.min(Math.max(8, anchor.left + anchor.size - 320), Math.max(8, innerWidth - 328))
-    panelStyle.top = Math.max(8, anchor.top - 12)
-    panelStyle.transform = 'translateY(-100%)'
+    style.left = Math.min(Math.max(8, anchor.left + anchor.size - 320), Math.max(8, innerWidth - 328))
+    style.top = Math.max(8, anchor.top - 12)
+    style.transform = 'translateY(-100%)'
   } else {
-    panelStyle.right = 20
-    panelStyle.bottom = 96
+    style.right = 20
+    style.bottom = 96
   }
-  return h('div', { style: panelStyle },
+  return h('div', { style },
     h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 } },
-      h('span', { style: { width: 8, height: 8, borderRadius: 4, background: dot } }),
-      h('strong', null, state === 'live' ? '通话中' : state === 'error' ? '连接失败' : '连接中…'),
+      h('span', { style: { width: 8, height: 8, borderRadius: 4, background: dot, flex: 'none' } }),
+      h('strong', { style: { color: 'var(--dsw-alias-label-primary, #e6edf3)' } }, label),
       h('button', {
+        type: 'button', 'aria-label': '关闭通话',
+        onPointerDown: (e) => { e.stopPropagation() },
         onClick: onClose,
-        style: { marginLeft: 'auto', background: 'transparent', border: 'none', color: 'inherit', cursor: 'pointer', fontSize: 16 },
+        style: {
+          marginLeft: 'auto', width: 24, height: 24, borderRadius: 12, lineHeight: '20px',
+          background: 'transparent', border: '1px solid var(--dsw-alias-border-l2, #3a3f45)',
+          color: 'var(--dsw-alias-label-secondary, #9aa4af)', cursor: 'pointer', fontSize: 14,
+        },
       }, '×'),
     ),
-    caption ? h('div', { style: { opacity: .85, marginBottom: 6, minHeight: 18 } }, caption) : null,
-    detail ? h('div', { style: { color: '#d1242f', fontSize: 12, marginBottom: 6 } }, detail) : null,
-    h('div', { style: { opacity: .6, fontSize: 12 } }, '说话即可，支持随时打断。')
+    caption ? h('div', { style: { opacity: 0.9, marginBottom: 6, minHeight: 18 } }, caption) : null,
+    detail ? h('div', { style: { color: '#f85149', fontSize: 12, marginBottom: 6 } }, detail) : null,
+    h('div', { style: { opacity: 0.65, fontSize: 12 } }, '说话即可，随时打断；Esc 关闭。'),
   )
 }
 
@@ -178,30 +246,7 @@ window.__ModuleLoader__.load({
     const React = require('react')
     const h = React.createElement
 
-
-
-    // 跟随阿源的浮动气泡：读它存在 localStorage 的位置，投影到视口后贴在其上方。
-    // 读不到（未装阿源）时退回右下角默认位置。
-    const BUBBLE_KEY = 'ayuan.bubble-position.v2'
-    function bubbleAnchor() {
-      try {
-        const raw = localStorage.getItem(BUBBLE_KEY)
-        if (!raw) return null
-        const p = JSON.parse(raw)
-        if (!Number.isFinite(p?.rx) || !Number.isFinite(p?.ry)) return null
-        const clamp = (n) => Math.max(0, Math.min(1, Number(n) || 0))
-        const size = window.matchMedia?.('(pointer:coarse)').matches ? 44 : 42
-        const y = Math.max(40, Math.min(innerHeight - size - 8, 40 + clamp(p.ry) * Math.max(1, innerHeight - size - 48)))
-        const dock = ['left', 'right'].includes(p.dock) ? p.dock : null
-        const x = dock === 'left' ? -size / 2
-          : dock === 'right' ? innerWidth - size / 2
-          : 8 + clamp(p.rx) * Math.max(0, innerWidth - size - 16)
-        return { x, y, size, dock }
-      } catch { return null }
-    }
-
-    // 直接读阿源气泡的 DOM 位置，逐帧跟随：拖动时不再有 localStorage 的 250ms 延迟。
-    function useAyuanAnchor() {
+    function useBubbleRect() {
       const [rect, setRect] = React.useState(null)
       React.useEffect(() => {
         let raf = 0
@@ -211,13 +256,13 @@ window.__ModuleLoader__.load({
           const el = document.querySelector('.ay-yuan-bubble')
           if (el) {
             const r = el.getBoundingClientRect()
-            if (r.width > 0 && r.height > 0) next = { x: r.left, y: r.top, size: r.width, dock: null }
+            if (r.width > 0 && r.height > 0) next = { x: r.left, y: r.top, size: r.width }
           }
-          if (!next) next = bubbleAnchor()
-          if (next && (!last
-            || Math.abs(next.x - last.x) > 0.25
-            || Math.abs(next.y - last.y) > 0.25
-            || Math.abs(next.size - last.size) > 0.25)) {
+          if (!next) {
+            const fb = bubbleFallback()
+            if (fb) next = { x: fb.x, y: fb.y, size: fb.size }
+          }
+          if (next && (!last || Math.abs(next.x - last.x) > 0.25 || Math.abs(next.y - last.y) > 0.25 || Math.abs(next.size - last.size) > 0.25)) {
             last = next
             setRect(next)
           }
@@ -230,27 +275,75 @@ window.__ModuleLoader__.load({
     }
 
     function VoiceLauncher() {
-      const [open, setOpen] = React.useState(false)
-      const anchor = useAyuanAnchor()
       const size = 42
-      let left = innerWidth - size - 24
-      let top = innerHeight - size - 96
-      if (anchor) {
-        left = Math.min(Math.max(4, anchor.x), innerWidth - size - 4)
-        top = anchor.y - size - 8
-        if (top < 8) { top = anchor.y; left = Math.max(4, anchor.x - size - 8) }
+      const [open, setOpen] = React.useState(false)
+      const rect = useBubbleRect()
+      const dragState = React.useRef(null)
+      const [offset, setOffset] = React.useState({ dx: 0, dy: 0 })
+      const moved = React.useRef(false)
+
+      const baseLeft = rect ? rect.x : innerWidth - size - 24
+      const baseTop = rect ? rect.y - size - 8 : innerHeight - size - 96
+      const left = Math.min(Math.max(4, baseLeft + offset.dx), innerWidth - size - 4)
+      const top = Math.min(Math.max(4, baseTop + offset.dy), innerHeight - size - 4)
+
+      const onPointerDown = (event) => {
+        if (event.button !== 0) return
+        const bubble = document.querySelector('.ay-yuan-bubble')
+        dragState.current = {
+          startX: event.clientX, startY: event.clientY,
+          baseDx: offset.dx, baseDy: offset.dy,
+          bubble, forwarded: false,
+        }
+        moved.current = false
+        try { event.currentTarget.setPointerCapture(event.pointerId) } catch {}
       }
+
+      const onPointerMove = (event) => {
+        const d = dragState.current
+        if (!d) return
+        const dx = event.clientX - d.startX
+        const dy = event.clientY - d.startY
+        if (!moved.current && Math.hypot(dx, dy) < 4) return
+        moved.current = true
+        if (d.bubble) {
+          if (!d.forwarded) {
+            forwardPointer('pointerdown', { ...event, clientX: event.clientX, clientY: event.clientY }, d.bubble)
+            d.forwarded = true
+          }
+          forwardPointer('pointermove', event, d.bubble, 1)
+        } else {
+          setOffset({ dx: d.baseDx + dx, dy: d.baseDy + dy })
+        }
+      }
+
+      const onPointerUp = (event) => {
+        const d = dragState.current
+        dragState.current = null
+        if (!d) return
+        if (d.bubble && d.forwarded) forwardPointer('pointerup', event, d.bubble, 0)
+        if (d.bubble && moved.current) {
+          d.bubble.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+        }
+        try { event.currentTarget.releasePointerCapture(event.pointerId) } catch {}
+      }
+
+      const onClick = () => {
+        if (moved.current) { moved.current = false; return }
+        setOpen((v) => !v)
+      }
+
       return h(React.Fragment, null,
         h('button', {
-          type: 'button', title: '阿源语音通话', 'aria-label': '阿源语音通话',
-          onClick: () => setOpen((v) => !v),
+          type: 'button', title: '阿源语音通话（可拖动）', 'aria-label': '阿源语音通话',
+          onPointerDown, onPointerMove, onPointerUp, onClick,
           style: {
-            position: 'fixed', left, top, width: size, height: size,
-            padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
+            position: 'fixed', left, top, width: size, height: size, padding: 0,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
             borderRadius: '50%', border: '1px solid var(--dsw-alias-border-l2)',
             background: 'var(--dsw-alias-bg-base)', color: 'var(--dsw-alias-label-primary)',
             boxShadow: open ? '0 0 0 2px var(--dsw-alias-brand-primary), 0 3px 14px #00000014' : '0 3px 14px #00000014',
-            cursor: open ? 'grabbing' : 'grab', zIndex: 10001, lineHeight: 1,
+            cursor: 'grab', zIndex: 10001, lineHeight: 1, pointerEvents: 'auto', touchAction: 'none',
           },
         }, h('svg', { width: 20, height: 20, viewBox: '0 0 24 24', fill: 'none', 'aria-hidden': true },
           h('path', {
@@ -258,27 +351,6 @@ window.__ModuleLoader__.load({
             stroke: 'currentColor', strokeWidth: 1.7, strokeLinejoin: 'round',
           }))),
         open ? h(VoicePanel, { onClose: () => setOpen(false), React, h, anchor: { left, top, size } }) : null,
-      )
-    }
-
-    function VoiceButton() {
-      const [open, setOpen] = React.useState(false)
-      return h(React.Fragment, null,
-        h('button', {
-          type: 'button', title: '阿源语音通话', 'aria-label': '阿源语音通话',
-          onClick: () => setOpen((v) => !v),
-          style: {
-            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-            width: 28, height: 28, borderRadius: 8, border: 'none', cursor: 'pointer',
-            background: open ? 'var(--dsw-alias-bg-brand, #247bbf)' : 'transparent',
-            color: open ? '#fff' : 'inherit', padding: 0,
-          },
-        }, h('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', 'aria-hidden': true },
-          h('path', {
-            d: 'M4 5.5C4 4.7 4.7 4 5.5 4h2.2c.7 0 1.3.5 1.5 1.2l.7 2.6c.1.6-.1 1.2-.6 1.5l-1.3.8a12 12 0 0 0 5.6 5.6l.8-1.3c.3-.5.9-.7 1.5-.6l2.6.7c.7.2 1.2.8 1.2 1.5v2.2c0 .8-.7 1.5-1.5 1.5C10.6 19.7 4.3 13.4 4 5.5Z',
-            stroke: 'currentColor', strokeWidth: 1.6, strokeLinejoin: 'round',
-          }))),
-        open ? h(VoicePanel, { onClose: () => setOpen(false), React, h }) : null,
       )
     }
 
