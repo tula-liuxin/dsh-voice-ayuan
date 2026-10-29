@@ -221,8 +221,8 @@ window.__ModuleLoader__.load({
           style: {
             position: 'fixed', left, top, width: size, height: size,
             borderRadius: size / 2, border: '1px solid var(--dsw-alias-border, #3a3f45)',
-            background: open ? 'var(--dsw-alias-bg-brand, #247bbf)' : 'var(--dsw-alias-bg-elevated, #1f2328)',
-            color: open ? '#fff' : 'inherit', cursor: 'pointer',
+            background: open ? 'var(--dsw-alias-bg-brand, #247bbf)' : 'rgba(28,30,34,0.94)',
+            color: '#e8eef5', cursor: 'pointer',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             boxShadow: '0 4px 14px rgba(0,0,0,.35)', zIndex: 998
           },
