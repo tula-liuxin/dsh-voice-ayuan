@@ -90,6 +90,7 @@ function VoicePanel({ onClose, React, h, anchor }) {
   const [state, setState] = React.useState('connecting')
   const [mic, setMic] = React.useState('opening')
   const [diag, setDiag] = React.useState('')
+  const [step, setStep] = React.useState('init')
   const [detail, setDetail] = React.useState('')
   const [caption, setCaption] = React.useState('')
   const clientRef = useRef(null)
@@ -153,6 +154,7 @@ function VoicePanel({ onClose, React, h, anchor }) {
       try { perm = (await navigator.permissions.query({ name: 'microphone' })).state } catch {}
       const hasMedia = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)
       setDiag('媒体接口 ' + (hasMedia ? '可用' : '缺失') + ' · 麦克风权限 ' + perm + ' · 安全上下文 ' + (window.isSecureContext ? '是' : '否'))
+      setStep('fetch status')
       const res = await fetch('/voice-ayuan/status', { cache: 'no-store' })
       const text = await res.text()
       let status = {}
@@ -162,16 +164,27 @@ function VoicePanel({ onClose, React, h, anchor }) {
         setDetail(status.error || (res.ok ? '语音服务未就绪，先在插件里启动服务' : '宿主插件未加载（重启 DSH 后再试）'))
         return
       }
+      setStep('ws connect')
       const wsUrl = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/voice-ayuan/rt'
       const client = new GatewayClient({
         url: wsUrl,
-        createSocket: (url) => new WebSocket(url),
+        createSocket: (url) => {
+          try {
+            return new WebSocket(url)
+          } catch (error) {
+            if (!disposed) {
+              setState('error')
+              setDetail('WebSocket 创建失败：' + (error && error.name) + ' ' + String(error && error.message || error).slice(0, 120))
+            }
+            throw error
+          }
+        },
         clientType: 'web',
         clientVersion: '0.1.2',
         clientInstanceId: 'voice-ayuan-' + Math.random().toString(36).slice(2),
         timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         capabilities: ['input.audio', 'session.output_voice'],
-        onStatus: (s) => { if (disposed) return; const st = (s && s.state) || 'connecting'; if (st === 'ready') setState('ready'); else if (st === 'closed' || st === 'error') setState('error'); else if (st === 'connecting') setState('connecting') },
+        onStatus: (s) => { if (disposed) return; const st = (s && s.state) || 'connecting'; setStep('ws ' + st); if (st === 'ready') setState('ready'); else if (st === 'closed' || st === 'error') setState('error'); else if (st === 'connecting') setState('connecting') },
         onEvent: (event) => {
           if (disposed || !event) return
           if (event.type === 'response.output_audio.delta' && event.delta) {
@@ -185,6 +198,7 @@ function VoicePanel({ onClose, React, h, anchor }) {
       })
       clientRef.current = client
       client.start()
+      setStep('mic open')
       try {
         await startMic(client)
         if (!disposed) { setMic('on'); setState('live') }
@@ -243,6 +257,7 @@ function VoicePanel({ onClose, React, h, anchor }) {
     detail ? h('div', { style: { color: '#f85149', fontSize: 12, marginBottom: 6 } }, detail) : null,
     h('div', { style: { opacity: 0.65, fontSize: 12 } }, '说话即可，随时打断；Esc 关闭。'),
     diag ? h('div', { style: { opacity: 0.45, fontSize: 11, marginTop: 6, wordBreak: 'break-all' } }, diag) : null,
+    h('div', { style: { opacity: 0.4, fontSize: 11, marginTop: 2, wordBreak: 'break-all' } }, 'step: ' + step),
   )
 }
 
