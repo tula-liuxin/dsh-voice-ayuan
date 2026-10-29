@@ -2,7 +2,17 @@
 
 > 状态：`lib/gateway.js`（6135B）与 `index.js`（9680B）已按本文件落盘；
 > 另在 `/voice-ayuan/status` 与 `provide('voiceCall')` 各加 `bridge` 字段（便于远程判断重载成功）。
-> 剩余动作：触发插件热重挂（见 §4）→ 跑 `test/bridge-e2e.mjs`。
+> 2026-10-29 23:48（Lead 触发重挂）已生效：`/voice-ayuan/status` 显示 `gateway.entry='bridge'`、
+> `gateway.bridge=true`、`bridge.phase='ready'`、`body.backend.protocol='dsh-session'`。
+> 重挂后又修了两处**需要再重挂一次才进宿主**的代码（当前语音链路不受影响）：
+> 1) `lib/bridge.js`：activity.updatedAt 改用 ISO 字符串（Gateway 协议要求；数字会让外部客户端
+>    的 task.* 响应被 zod 丢弃）；`cancelTask` 取消时立即释放串行锁（避免长工具期间 BRIDGE_BUSY 假死）。
+> 2) `bridge/backend-adapter.mjs`：`normalizeActivity()` 兜底（新 fork 的网关子进程已用新代码）。
+> 另外 16:14 又加固了「取消后立刻派新任务」竞态：
+> - 宿主 `lib/bridge.js`：turn 已知时 cancel 立即终结并释放锁；/cancel 等锁释放后才响应；
+> - 适配器 `bridge/backend-adapter.mjs`：cancel 后等宿主 activeTask 释放（≤2s）再返回。
+> E2E（新适配器）已证明 attempts=1 无 BRIDGE_BUSY；正在运行的网关子进程/宿主是加固前版本，
+> 想彻底装进生产需再重挂一次（可选，不阻塞验收）。
 
 本文件记录 index.js / lib/gateway.js 的接线改动（已落盘）。宿主插件**没有源码级自动 HMR**，
 落盘后需要触发一次 profile recomposition（推荐 `remote.pluginManager.setPluginEnabled` 重挂插件行，

@@ -65,6 +65,25 @@ export class BridgeBackendError extends Error {
   }
 }
 
+/**
+ * 把宿主 activity 归一化到 Gateway 协议可接受的形状：GatewayActivitySchema 要求
+ * updatedAt 是 ISO 字符串；这里兜住宿主将来可能发数字/缺失的情况，避免整条
+ * task.* 响应在客户端校验时被丢弃（表现为 task.get 超时）。
+ */
+function normalizeActivity(activity) {
+  if (!activity || typeof activity !== 'object') return null
+  const normalized = { ...activity }
+  if (normalized.updatedAt !== undefined && typeof normalized.updatedAt !== 'string') {
+    const time = Number(normalized.updatedAt)
+    normalized.updatedAt = Number.isFinite(time) ? new Date(time).toISOString() : undefined
+    if (normalized.updatedAt === undefined) delete normalized.updatedAt
+  }
+  if (typeof normalized.kind !== 'string' || !normalized.kind.trim()) {
+    normalized.kind = 'status'
+  }
+  return normalized
+}
+
 function cancellationError(taskId, cause) {
   return new BridgeBackendError(`任务 ${taskId} 已取消`, {
     code: 'WORK_CANCELLED',
@@ -321,6 +340,9 @@ export class BridgeSessionBackend {
     if (record.bridgeTaskId) {
       try {
         await this.#request('POST', `/tasks/${encodeURIComponent(record.bridgeTaskId)}/cancel`, {})
+        // 兼容旧宿主：取消请求送达后可能还有一小段"正在取消"窗口。这里等宿主真正
+        // 释放 activeTask 再让 submit 拒绝，避免用户取消后立刻派新任务撞上 BRIDGE_BUSY。
+        await this.#waitHostTaskReleased(record.bridgeTaskId, 2_000)
       } catch (error) {
         // 宿主不可达也要让调用方拿到确定的取消结果；本地仍然终止这条提交。
         this.log('cancel request failed:', String(error && error.message || error))
@@ -494,11 +516,13 @@ export class BridgeSessionBackend {
     switch (event.type) {
       case 'accepted':
         return
-      case 'activity':
-        if (event.activity) {
-          this.#publish({ type: 'backend.activity', activity: event.activity }, record)
+      case 'activity': {
+        const activity = normalizeActivity(event.activity)
+        if (activity) {
+          this.#publish({ type: 'backend.activity', activity }, record)
         }
         return
+      }
       case 'message':
         if (event.message) {
           this.#publish({ type: 'backend.message', message: event.message }, record)
@@ -566,6 +590,19 @@ export class BridgeSessionBackend {
       }
       default:
         this.log('unknown bridge event', event.type)
+    }
+  }
+
+  async #waitHostTaskReleased(bridgeTaskId, timeoutMs) {
+    const started = Date.now()
+    while (Date.now() - started < timeoutMs) {
+      try {
+        const status = await this.#request('GET', '/status', undefined, { timeoutMs: 2_000 })
+        if (status?.activeTask?.bridgeTaskId !== bridgeTaskId) return
+      } catch {
+        return
+      }
+      await delay(75)
     }
   }
 

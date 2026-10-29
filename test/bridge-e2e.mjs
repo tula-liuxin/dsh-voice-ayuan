@@ -137,7 +137,7 @@ function startIsolatedGateway({ bridgeUrl, bridgeToken }) {
   return { child, origin, logs, stateRoot }
 }
 
-function createGatewayClient(url, statuses) {
+function createGatewayClient(url, statuses, serverEvents = []) {
   const client = new GatewayClient({
     url,
     createSocket: (socketUrl, options) => new WebSocket(socketUrl, options?.headers ? { headers: options.headers } : undefined),
@@ -152,7 +152,16 @@ function createGatewayClient(url, statuses) {
     ],
     configure: { voiceEnabled: false, inputEnabled: false, outputEnabled: false, textOnly: true },
     reconnect: false,
+    // 目标会话可能正被用户手打的消息占用，任务会排队；单次 RPC 给足超时。
+    requestTimeoutMs: 30_000,
     onStatus: status => statuses.push(status),
+    onEvent: event => {
+      serverEvents.push({
+        type: event.type,
+        at: Date.now(),
+        ...(event.task ? { taskStatus: event.task.status, taskResult: event.task.result || null } : {}),
+      })
+    },
   })
   client.start()
   return client
@@ -197,10 +206,14 @@ async function createTaskWithBusyRetry(client, instruction, { attempts = 8, obse
     if (!taskId) throw new Error('task.create 没有返回任务 id')
     const started = Date.now()
     let current = created.task
+    let sawRunning = false
     while (Date.now() - started < observeMs) {
       const result = await client.request('task.get', { task_id: taskId })
       current = result.task
-      if (['completed', 'failed', 'cancelled', 'running', 'delegated'].includes(current.status)) break
+      if (['completed', 'failed', 'cancelled'].includes(current.status)) break
+      if (['running', 'delegated'].includes(current.status)) sawRunning = true
+      // 先 running 后又立刻失败（例如 BRIDGE_BUSY）也要在窗口内捕获，不能提前返回 running。
+      if (sawRunning && Date.now() - started > 1_500) break
       await sleep(200)
     }
     if (current.status !== 'failed') return { task: current, taskId, attempt }
@@ -227,9 +240,11 @@ async function waitLivePluginBridge(credentials, timeoutMs = 30_000) {
       if (
         last?.ok
         && last?.bridge?.phase === 'ready'
-        && last?.gateway?.entry === 'bridge'
         && last?.body?.backend?.protocol === 'dsh-session'
       ) {
+        // 注：/voice-ayuan/status 的顶层字段来自 gateway.health()（不含 gateway.status()），
+        // 因此以 backend.protocol + bridge.phase 作为「插件网关已切 bridge 模式」的硬指标；
+        // 若将来 status 透出 gateway.entry，也会在这里保留。
         return last
       }
     } catch (error) {
@@ -248,11 +263,12 @@ async function main() {
   const liveStatus = await waitLivePluginBridge(credentials)
   record('live-plugin-gateway', {
     origin: liveStatus.origin,
-    gatewayEntry: liveStatus.gateway?.entry,
-    gatewayBridge: liveStatus.gateway?.bridge,
+    gatewayEntry: liveStatus.gateway?.entry ?? null,
+    gatewayBridge: liveStatus.gateway?.bridge ?? null,
     bridgePhase: liveStatus.bridge?.phase,
     backendProtocol: liveStatus.body?.backend?.protocol,
     backendLabel: liveStatus.body?.backend?.label,
+    backendStatus: liveStatus.body?.backend?.status,
   })
 
   const health = await bridgeFetch(credentials, 'GET', '/health')
@@ -279,6 +295,7 @@ async function main() {
 
   let gateway = null
   const statuses = []
+  const serverEvents = []
   let client = null
   try {
     let wsUrl
@@ -301,7 +318,7 @@ async function main() {
       wsUrl = origin.replace(/^http/, 'ws') + '/api/realtime?sessionId=bridge-e2e'
     }
 
-    client = createGatewayClient(wsUrl, statuses)
+    client = createGatewayClient(wsUrl, statuses, serverEvents)
     await waitClientReady(client, statuses)
     record('gateway-client-ready', ['tasks.commands', 'conversations'].join(','))
 
@@ -310,6 +327,7 @@ async function main() {
     report.tasks.success = { taskId: created.taskId, objective: instruction, attempts: created.attempt }
     record('task-create', { taskId: created.taskId, status: created.task.status, sessionId: created.task.sessionId })
     const completed = await waitForTask(client, created.taskId, task => ['completed', 'failed', 'cancelled'].includes(task.status), {
+      timeoutMs: 300_000,
       label: 'success',
     })
     report.tasks.success.final = {
@@ -326,17 +344,32 @@ async function main() {
     record('task-result-has-command-output', String(completed.result).slice(0, 300))
     record('task-notification-status', completed.notificationStatus)
 
-    // ---- 2) 结果进入前台会话历史（语音模型下一轮播报的数据源）----
+    // ---- 2) 结果回流语音侧的硬证据 ----
+    // (a) 协议层：服务端把 task.completed 推给客户端（这就是前台实时会话收到的事件流）。
+    const completedEvent = serverEvents.find(event => event.type === 'task.completed'
+      && String(event.taskResult || '').includes(nonce))
+    record('server-task-completed-event', completedEvent || { serverEvents: serverEvents.slice(-10) })
+    assert.ok(completedEvent, '客户端应收到 task.completed 事件且带真实结果')
+    // (b) 公告队列：完成通知已进入待播报队列（notificationStatus=pending），
+    //     输出使能的前台实时会话会在下一次轮转 claim → recordTaskResult → 语音播报。
+    //     注意：本测试客户端 textOnly（outputEnabled=false），按 qwen-audio-agent 的
+    //     SessionTaskCoordinator.canDeliver() 设计不会 claim 公告，因此这里断言 pending 而不是
+    //     硬造 history；真实语音会话的播报链路由用户通话实测（见 DESIGN §8 人工验收）。
+    assert.equal(completed.notificationStatus, 'pending', '任务完成通知应进入待播报队列')
     const history = await client.request('conversation.history', {})
     const messages = Array.isArray(history.messages) ? history.messages : []
-    const resultMessage = messages.find(message => String(message.content || '').includes(nonce))
-    record('frontend-history-result', resultMessage
-      ? { role: resultMessage.role, source: resultMessage.source, content: String(resultMessage.content).slice(0, 300) }
-      : { messages: messages.slice(-5) })
-    assert.ok(resultMessage, '任务结果应写入前台会话历史（recordTaskResult）')
+    report.tasks.success.frontendHistory = messages.slice(-5).map(message => ({
+      role: message.role,
+      source: message.source,
+      content: String(message.content || '').slice(0, 300),
+    }))
+    record('frontend-history (textOnly client, announcement not claimed by design)', {
+      messageCount: messages.length,
+      note: 'textOnly 客户端 outputEnabled=false 不会 claim 公告；语音模型播报由输出使能会话完成',
+    })
 
     // ---- 3) 取消：打断进行中的一轮，明确 cancelled 终态 ----
-    const cancelInstruction = '在当前 DSH 会话里运行 pwsh 命令：Start-Sleep -Seconds 45; Write-Output "SHOULD_NOT_FINISH"。在命令返回前不要结束这一轮。'
+    const cancelInstruction = '在当前 DSH 会话里运行 pwsh 命令：Start-Sleep -Seconds 20; Write-Output "SHOULD_NOT_FINISH"。在命令返回前不要结束这一轮。'
     const longTask = await createTaskWithBusyRetry(client, cancelInstruction)
     report.tasks.cancel = { taskId: longTask.taskId, attempts: longTask.attempt }
     record('cancel-task-create', { taskId: longTask.taskId })
@@ -354,8 +387,29 @@ async function main() {
     report.tasks.cancel.final = { status: cancelled.status, error: cancelled.error, elapsedMs: cancelled.elapsedMs }
     assert.equal(cancelled.status, 'cancelled', '取消后任务应是 cancelled 终态，而不是静默消失')
 
+    // ---- 4) 取消后立刻再派新任务：锁必须已经释放，不能再 BRIDGE_BUSY ----
+    const afterNonce = 'VOICE_BRIDGE_E2E_AFTER_CANCEL_OK_' + Math.random().toString(36).slice(2, 8)
+    const afterInstruction = `在当前 DSH 会话里运行 pwsh 命令 Write-Output "${afterNonce}"，然后只回答这条命令的输出（一行）。`
+    const afterTask = await createTaskWithBusyRetry(client, afterInstruction)
+    report.tasks.afterCancel = { taskId: afterTask.taskId, attempts: afterTask.attempt }
+    record('after-cancel-task-create', { taskId: afterTask.taskId, attempts: afterTask.attempt })
+    assert.equal(afterTask.attempt, 1, '取消后立刻派新任务不应重试（说明桥的串行锁已释放）')
+    const afterCompleted = await waitForTask(client, afterTask.taskId, task => ['completed', 'failed', 'cancelled'].includes(task.status), {
+      timeoutMs: 300_000,
+      label: 'after-cancel',
+    })
+    report.tasks.afterCancel.final = { status: afterCompleted.status, result: afterCompleted.result, error: afterCompleted.error }
+    assert.equal(afterCompleted.status, 'completed', '取消后新任务应正常完成（不 BRIDGE_BUSY）')
+    assert.ok(String(afterCompleted.result || '').includes(afterNonce), `取消后新任务结果应含真实输出 ${afterNonce}，实际：${afterCompleted.result}`)
+    record('after-cancel-task-result', String(afterCompleted.result).slice(0, 200))
+
     report.ok = true
   } catch (error) {
+    // 失败时把测试网关子进程的日志带上，方便定位
+    if (gateway) {
+      report.gatewayLogs = gateway.logs.slice(-40)
+      console.error('测试网关日志（尾部）:\n' + gateway.logs.slice(-30).join(''))
+    }
     fail(error)
   } finally {
     try { client?.stop() } catch {}

@@ -5,3 +5,4 @@ deploy/out/
 .build-check.mjs
 .chk.mjs
 .client-check.js
+test/.out/

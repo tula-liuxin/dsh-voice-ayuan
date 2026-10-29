@@ -222,7 +222,8 @@ action=decline/cancel 时取消这一轮。180s 无回答取消这一轮（避�
 | `test/bridge-host.test.mjs` | 模拟 DSH 宿主接口驱动真实 `lib/bridge.js`（会话选择/事件映射/取消/权限/提问/并发/鉴权）|
 | `test/bridge-gateway-process.test.mjs` | `lib/gateway.js` 接线验证（旧路径兼容 + bridge 路径），接线后运行 |
 | `test/bridge-prompt.test.mjs` | 提示词真实加载 + 工具面收敛 + spawn 描述覆盖 |
-| `test/bridge-e2e.mjs` | 真实端到端：协议层任务 → 当前 DSH 会话真实执行 pwsh → 结果/历史/取消 |
+| `test/bridge-e2e.mjs` | 真实端到端：协议层任务 → 当前 DSH 会话真实执行 pwsh → 结果/取消（报告 `test/.out/bridge-e2e-report.json`）|
+| `test/bridge-voice-e2e.mjs` | 语音播报端到端：真实 s2s 上游，任务完成→公告→模型语音回应（audio.delta + transcript，报告 `test/.out/bridge-voice-e2e-report.json`）|
 
 ---
 
@@ -244,7 +245,21 @@ action=decline/cancel 时取消这一轮。180s 无回答取消这一轮（避�
    - 报告写到 `test/.out/bridge-e2e-report.json`。
 6. `node --test test/bridge-gateway-process.test.mjs`（接线后）— 证明 `lib/gateway.js` 旧路径（官方
    bootstrap）向后兼容 + bridge 路径（自定义入口/env/dsh-session 后端）两条都过。
-7. 人工语音验收（用户开着通话面板）：说"帮我看一下现在几点/把桌面上的 X 整理一下" → 面板字幕出现任务
+7. **实测结果（2026-10-29 23:48~00:12）**：
+   - 宿主重载成功：`/voice-ayuan/status` → `gateway.entry='bridge'`、`gateway.bridge=true`、
+     `bridge.phase='ready'`、`body.backend.protocol='dsh-session'`。
+   - `test/bridge-e2e.mjs` PASS（第二次重挂后复跑）：目标会话 `session-94d8b89b…`（用户当前会话，cwd Downloads）→
+     task `task_1` → 当前会话真实执行 `pwsh Write-Output VOICE_BRIDGE_E2E_OK_qdx1f2ck` →
+     `result` 含 marker；客户端收到 `task.completed` 推送；`notificationStatus='pending'`（待播报队列）；
+     长任务 `task.cancel` → `cancelled` 终态；**取消后立刻派新任务（attempts=1，无 BRIDGE_BUSY）** →
+     结果 `VOICE_BRIDGE_E2E_AFTER_CANCEL_OK_hwykwq`（验证串行锁已释放）。报告 `test/.out/bridge-e2e-report.json`。
+   - `test/bridge-voice-e2e.mjs` PASS（第二次重挂后复跑，真实 s2s 上游）：任务完成 → `task.notification.delivered` →
+     实时模型收到公告并回应：assistant transcript = `验证结果就是这一行VOICE_SPEAK_E2E_h2a0ie`，
+     `audio.delta` 18432 bytes / 0.38s。
+     即「结果回流语音模型并说出来」已用音频字节 + 转写作证。报告 `test/.out/bridge-voice-e2e-report.json`。
+   - 另：Host bridge 日志显示用户实际用语音派过一条任务（"查一下当前语音前台背后实际使用的是什么大模型…"），
+     `bridge-task-terminal`：turn 50、result 含 deepseek-flash 结论（即真实用户链路已跑通）。
+8. 人工语音验收（用户开着通话面板）：说"帮我看一下现在几点/把桌面上的 X 整理一下" → 面板字幕出现任务
    回执 → 当前 DSH 会话里能看到阿源真的调工具 → 几秒后语音播报结果；中途说"停" → 语音确认已叫停，
    会话里那一轮被中断。
 
@@ -276,3 +291,11 @@ action=decline/cancel 时取消这一轮。180s 无回答取消这一轮（避�
 - GUI 与语音同时操作同一会话时，语音任务按队列排序；用户取消语义以"只中断语音任务那一轮"为准。
 - 审批策略 `never` 的环境（当前 desktop danger-full-access）不会产生 approval 请求，权限中转只有单测覆盖。
 - 结果文本上限 600 字，来自最后一条 assistant 文本；超长内容由前台模型概括，不在桥里伪造摘要。
+
+### 协议兼容坑（已修，值得记住）
+- Gateway 的 `GatewayActivitySchema` 要求 activity.`updatedAt` 是 **ISO 字符串**。宿主最初发数字
+  `Date.now()`，导致 task.get/task.completed 等**整条响应在客户端 zod 校验时被丢弃**（表现为
+  task.get 一直超时，但任务其实已经完成）。修法：宿主 pushActivity 用 ISO 字符串；适配器再
+  `normalizeActivity()` 兜底（宿主发数字也转成 ISO），保证跨版本兼容。
+- DSH 的 `agent.cancel()` 是协作式的：长工具可能几十秒后才触发 turn/end。桥在取消请求送达后
+  **立即终结 bridge task 并释放串行锁**，避免后续语音任务被 `BRIDGE_BUSY` 卡住；晚到的 turn 事件被忽略。

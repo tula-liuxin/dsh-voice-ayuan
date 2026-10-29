@@ -577,7 +577,7 @@ export function computeMetrics({
     sameBaseline,
     dockFixedX: dockFixedX == null ? null : Math.abs(dockFixedX) <= 0.5,
     dockFixedY: dockFixedY == null ? null : Math.abs(dockFixedY) <= 0.5,
-    stackGap: stackGap == null ? null : Math.abs(stackGap - gap) <= 0.5,
+    stackGap: stackGap == null ? null : Math.abs(stackGap - Math.max(0, step - phoneSize)) <= 0.5,
     lightningStep: lightningStep == null ? null : Math.abs(Math.abs(lightningStep) - step) <= 0.5,
     noOverlap: overlapAnchor == null ? null : overlapAnchor <= 0.5,
     inViewport: inViewportOk == null ? null : inViewportOk,
@@ -617,6 +617,7 @@ export function computeMetrics({
     dockFixedX,
     dockFixedY,
     stackGap,
+    stackGapExpected: round2(Math.max(0, step - phoneSize)),
     lightningStep,
     sizeDelta,
     styleParity,
@@ -704,7 +705,7 @@ export function formatMetricsLine(metrics) {
     if (inv.sameBaseline === false) problems.push('同一中线偏差 ' + fmt(delta.y) + 'px 超差')
   }
   if (inv.expectedSlot === false) problems.push('偏离锚点槽位 (' + fmt(delta.x) + ', ' + fmt(delta.y) + ')px')
-  if (inv.stackGap === false) problems.push('与闪电间隙 ' + fmt(metrics.stackGap) + 'px ≠ ' + fmt(metrics.gap) + 'px')
+  if (inv.stackGap === false) problems.push('与闪电间隙 ' + fmt(metrics.stackGap) + 'px ≠ ' + fmt(metrics.stackGapExpected) + 'px')
   if (inv.sameSize === false) problems.push('尺寸差 ' + sizeText + 'px')
   if (inv.styleParity === false) problems.push('边框/阴影与闪电不一致')
   if (inv.noOverlap === false) problems.push('按钮互相压叠')
@@ -971,6 +972,37 @@ export function createLauncher({ React, h }) {
       window.addEventListener('ayuan:launcher-anchor-v1', onAnchor)
       try { window.dispatchEvent(new Event('leo-quick:anchor-request-v1')) } catch {}
       return () => window.removeEventListener('ayuan:launcher-anchor-v1', onAnchor)
+    }, [])
+    // 窗口最顶部/最底部有一条不可交互带（标题条/边缘），贴到那里会「点不了也拖不动」。
+    // 自动把鲸鱼拉回安全区（最多 3 次、间隔 4s），整排跟着回到可点位置。
+    useEffect(() => {
+      let rescues = 0
+      let lastAt = 0
+      let stopped = false
+      const rescue = () => {
+        if (stopped || rescues >= 3) return
+        const el = document.querySelector('.ay-yuan-bubble')
+        if (!el) return
+        const rect = el.getBoundingClientRect()
+        if (!(rect.width > 0) || !(rect.height > 0)) return
+        const viewW = innerWidth
+        const viewH = innerHeight
+        const unsafeTop = rect.top < 24
+        const unsafeBottom = rect.bottom > viewH - 6
+        if (!unsafeTop && !unsafeBottom) return
+        const now = Date.now()
+        if (now - lastAt < 4000) return
+        lastAt = now
+        rescues += 1
+        const x = Math.max(8, Math.min(rect.left, viewW - rect.width - 8))
+        const y = Math.max(64, Math.min(viewH - rect.height - 64, viewH / 2))
+        window.dispatchEvent(new CustomEvent('leo-quick:launcher-move-v1', {
+          detail: { x, y: unsafeTop ? 72 : y, end: true },
+        }))
+      }
+      const timer = setInterval(rescue, 900)
+      const first = setTimeout(() => { rescue(); setTimeout(() => { stopped = true; clearInterval(timer) }, 12000) }, 500)
+      return () => { clearInterval(timer); clearTimeout(first) }
     }, [])
     // 每次渲染都从 live DOM 读邻居（兄弟按钮位置；旧版兄弟插件没有 anchor 事件时用来反推锚点）。
     const liveNeighbors = readNeighbors(document, window)
