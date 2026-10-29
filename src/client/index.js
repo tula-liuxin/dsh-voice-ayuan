@@ -170,7 +170,10 @@ function VoicePanel({ onClose, React, h, anchor }) {
         url: wsUrl,
         createSocket: (url) => {
           try {
-            return new WebSocket(url)
+            const socket = new WebSocket(url)
+            socket.addEventListener('close', (event) => { if (!disposed && event.code !== 1000) setDetail('WS 关闭 ' + event.code + ' ' + String(event.reason || '').slice(0, 80)) })
+            socket.addEventListener('error', () => { if (!disposed) setDetail('WS 连接错误（看 step）') })
+            return socket
           } catch (error) {
             if (!disposed) {
               setState('error')
@@ -307,15 +310,16 @@ window.__ModuleLoader__.load({
       const spot = React.useMemo(() => {
         if (!rect) return { left: innerWidth - size - 24, top: innerHeight - size - 96 }
         const candidates = [
-          { dx: -96, dy: 0 }, { dx: -144, dy: 0 }, { dx: -48, dy: 0 }, { dx: 0, dy: -56 },
+          { dx: -94, dy: 0 }, { dx: -47, dy: 0 }, { dx: 0, dy: -50 }, { dx: -141, dy: 0 },
         ]
         const free = (left, top) => {
           if (left < 4 || top < 4) return false
           if (typeof document.elementFromPoint !== 'function') return true
           const el = document.elementFromPoint(left + size / 2, top + size / 2)
-          if (!el || el === document.body || el === document.documentElement) return true
+          if (!el) return true
           if (btnRef.current && (el === btnRef.current || btnRef.current.contains(el))) return true
-          return false
+          const other = el.closest && el.closest('button')
+          return !other
         }
         for (const c of candidates) {
           const left = rect.x + c.dx
