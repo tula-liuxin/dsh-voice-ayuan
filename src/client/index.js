@@ -48,7 +48,7 @@ class CaptureProcessor extends AudioWorkletProcessor {
 registerProcessor('voice-ayuan-capture', CaptureProcessor)
 `
 
-function VoicePanel({ onClose, React, h }) {
+function VoicePanel({ onClose, React, h, anchor }) {
   const { useEffect, useRef, useState } = React
   const [state, setState] = useState('connecting')
   const [detail, setDetail] = useState('')
@@ -141,14 +141,23 @@ function VoicePanel({ onClose, React, h }) {
   }, [])
 
   const dot = state === 'live' ? '#2ea043' : state === 'error' ? '#d1242f' : '#bf8700'
-  return h('div', {
-    style: {
-      position: 'fixed', right: 20, bottom: 232, width: 320, zIndex: 9999,
-      background: 'var(--dsw-alias-bg-elevated, #1f2328)', color: 'inherit',
-      border: '1px solid var(--dsw-alias-border, #30363d)', borderRadius: 14,
-      boxShadow: '0 12px 32px rgba(0,0,0,.35)', padding: 16, fontSize: 13,
-    },
-  },
+  const panelStyle = {
+    position: 'fixed', width: 320, zIndex: 9999,
+    background: 'var(--dsw-alias-bg-layer-2, #2a2e35)',
+    color: 'var(--dsw-alias-label-primary, #e6edf3)',
+    border: '1px solid var(--dsw-alias-border-l2, #3a3f45)', borderRadius: 14,
+    boxShadow: '0 12px 32px rgba(0,0,0,.45)', padding: 16, fontSize: 13,
+    backdropFilter: 'blur(10px)',
+  }
+  if (anchor) {
+    panelStyle.left = Math.min(Math.max(8, anchor.left + anchor.size - 320), Math.max(8, innerWidth - 328))
+    panelStyle.top = Math.max(8, anchor.top - 12)
+    panelStyle.transform = 'translateY(-100%)'
+  } else {
+    panelStyle.right = 20
+    panelStyle.bottom = 96
+  }
+  return h('div', { style: panelStyle },
     h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 } },
       h('span', { style: { width: 8, height: 8, borderRadius: 4, background: dot } }),
       h('strong', null, state === 'live' ? '通话中' : state === 'error' ? '连接失败' : '连接中…'),
@@ -191,14 +200,31 @@ window.__ModuleLoader__.load({
       } catch { return null }
     }
 
+    // 直接读阿源气泡的 DOM 位置，逐帧跟随：拖动时不再有 localStorage 的 250ms 延迟。
     function useAyuanAnchor() {
-      const [rect, setRect] = React.useState(() => bubbleAnchor())
+      const [rect, setRect] = React.useState(null)
       React.useEffect(() => {
-        const update = () => setRect(bubbleAnchor())
-        update()
-        const timer = setInterval(update, 250)
-        window.addEventListener('resize', update)
-        return () => { clearInterval(timer); window.removeEventListener('resize', update) }
+        let raf = 0
+        let last = null
+        const tick = () => {
+          let next = null
+          const el = document.querySelector('.ay-yuan-bubble')
+          if (el) {
+            const r = el.getBoundingClientRect()
+            if (r.width > 0 && r.height > 0) next = { x: r.left, y: r.top, size: r.width, dock: null }
+          }
+          if (!next) next = bubbleAnchor()
+          if (next && (!last
+            || Math.abs(next.x - last.x) > 0.25
+            || Math.abs(next.y - last.y) > 0.25
+            || Math.abs(next.size - last.size) > 0.25)) {
+            last = next
+            setRect(next)
+          }
+          raf = requestAnimationFrame(tick)
+        }
+        tick()
+        return () => cancelAnimationFrame(raf)
       }, [])
       return rect
     }
@@ -206,13 +232,13 @@ window.__ModuleLoader__.load({
     function VoiceLauncher() {
       const [open, setOpen] = React.useState(false)
       const anchor = useAyuanAnchor()
-      const size = 40
+      const size = 42
       let left = innerWidth - size - 24
-      let top = innerHeight - size - 100
+      let top = innerHeight - size - 96
       if (anchor) {
-        if (anchor.dock === 'right') { left = innerWidth - anchor.size * 2 - 12; top = anchor.y }
-        else if (anchor.dock === 'left') { left = anchor.size + 12; top = anchor.y }
-        else { left = Math.min(Math.max(4, anchor.x), innerWidth - size - 4); top = anchor.y - anchor.size - 8 }
+        left = Math.min(Math.max(4, anchor.x), innerWidth - size - 4)
+        top = anchor.y - size - 8
+        if (top < 8) { top = anchor.y; left = Math.max(4, anchor.x - size - 8) }
       }
       return h(React.Fragment, null,
         h('button', {
@@ -220,18 +246,18 @@ window.__ModuleLoader__.load({
           onClick: () => setOpen((v) => !v),
           style: {
             position: 'fixed', left, top, width: size, height: size,
-            borderRadius: size / 2, border: '1px solid var(--dsw-alias-border, #3a3f45)',
-            background: open ? 'var(--dsw-alias-bg-brand, #247bbf)' : 'rgba(28,30,34,0.94)',
-            color: '#e8eef5', cursor: 'pointer',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            boxShadow: '0 4px 14px rgba(0,0,0,.35)', zIndex: 998
+            padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
+            borderRadius: '50%', border: '1px solid var(--dsw-alias-border-l2)',
+            background: 'var(--dsw-alias-bg-base)', color: 'var(--dsw-alias-label-primary)',
+            boxShadow: open ? '0 0 0 2px var(--dsw-alias-brand-primary), 0 3px 14px #00000014' : '0 3px 14px #00000014',
+            cursor: open ? 'grabbing' : 'grab', zIndex: 10001, lineHeight: 1,
           },
-        }, h('svg', { width: 18, height: 18, viewBox: '0 0 24 24', fill: 'none', 'aria-hidden': true },
+        }, h('svg', { width: 20, height: 20, viewBox: '0 0 24 24', fill: 'none', 'aria-hidden': true },
           h('path', {
             d: 'M4 5.5C4 4.7 4.7 4 5.5 4h2.2c.7 0 1.3.5 1.5 1.2l.7 2.6c.1.6-.1 1.2-.6 1.5l-1.3.8a12 12 0 0 0 5.6 5.6l.8-1.3c.3-.5.9-.7 1.5-.6l2.6.7c.7.2 1.2.8 1.2 1.5v2.2c0 .8-.7 1.5-1.5 1.5C10.6 19.7 4.3 13.4 4 5.5Z',
-            stroke: 'currentColor', strokeWidth: 1.6, strokeLinejoin: 'round',
+            stroke: 'currentColor', strokeWidth: 1.7, strokeLinejoin: 'round',
           }))),
-        open ? h(VoicePanel, { onClose: () => setOpen(false), React, h }) : null,
+        open ? h(VoicePanel, { onClose: () => setOpen(false), React, h, anchor: { left, top, size } }) : null,
       )
     }
 

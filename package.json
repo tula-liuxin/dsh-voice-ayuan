@@ -1,6 +1,6 @@
 {
   "name": "@local/voice-ayuan",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "type": "module",
   "description": "阿源语音通话：在 DSH 输入区点一个图标，和本地 speech-to-speech 实时对话，并把活派给阿源。",
