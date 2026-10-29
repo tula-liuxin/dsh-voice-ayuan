@@ -323,12 +323,15 @@ async function modeE2e({ skipGateway = false, sampleRate = 16000, fixturePath = 
   let voiceState = 'init'
   let playbackStarted = false
   let audioDone = false
+  const latency = { pushEnd: 0, userFinal: 0, responseStarted: 0, firstAudio: 0, audioDone: 0 }
   const clientRef = { current: null }
   const client = newClient(origin, {
     onEvent: (event) => {
       const type = event.type
       rawEvents.push(event)
       seen.push(type)
+      if (type === 'response.started' && !latency.responseStarted) latency.responseStarted = Date.now()
+      if (type === 'audio.delta' && !latency.firstAudio) latency.firstAudio = Date.now()
       if (type === 'voice.connection') { connectionState = event.state; log('voice.connection', event.state, event.provider || '') }
       else if (type === 'voice.state') { voiceState = event.state; log('voice.state', event.state) }
       else if (type === 'audio.delta') {
@@ -349,7 +352,10 @@ async function modeE2e({ skipGateway = false, sampleRate = 16000, fixturePath = 
         log('audio.done', JSON.stringify({ responseId: event.responseId }).slice(0, 200))
       } else if (type === 'transcript.final' || type === 'transcript.delta') {
         transcripts.push(event)
-        if (type === 'transcript.final') log('transcript.final', event.role + ':', JSON.stringify(event.content || '').slice(0, 200))
+        if (type === 'transcript.final') {
+          if (event.role === 'user' && !latency.userFinal) latency.userFinal = Date.now()
+          log('transcript.final', event.role + ':', JSON.stringify(event.content || '').slice(0, 200))
+        }
       } else if (type === 'tool.call') { toolCalls.push(event); log('tool.call', JSON.stringify(event).slice(0, 300)) }
       else if (type === 'error') log('client.event.error', JSON.stringify(event).slice(0, 300))
       else log('event', type, JSON.stringify(event).slice(0, 180))
@@ -383,6 +389,7 @@ async function modeE2e({ skipGateway = false, sampleRate = 16000, fixturePath = 
     const silence = Buffer.alloc(Math.round(sampleRate * silenceMs / 1000) * 2)
     await pushBuffer(silence, 'silence')
     log('pushed ' + (silenceMs / 1000).toFixed(2) + 's trailing silence (VAD turn close)')
+    latency.pushEnd = Date.now()
 
     // 等待：1) 输入转写（说话人识别） 2) 助手音频 3) 助手转写
     const deadline = Date.now() + TIMEOUT_MS
@@ -415,8 +422,19 @@ async function modeE2e({ skipGateway = false, sampleRate = 16000, fixturePath = 
       writeWav16k(join(OUT, 'e2e-output-24k.wav'), decodePcm16(audio.subarray(0, audio.length - (audio.length % 2))), outRate)
     }
     writeFileSync(join(OUT, 'e2e-events.jsonl'), rawEvents.map((e) => JSON.stringify(e)).join('\n') + '\n')
+    latency.audioDone = audioDone ? Date.now() : 0
+    const ms = (from, to) => (from && to ? to - from : null)
+    report.latencyMs = {
+      pushEndToUserFinal: ms(latency.pushEnd, latency.userFinal),
+      pushEndToResponseStarted: ms(latency.pushEnd, latency.responseStarted),
+      userFinalToResponseStarted: ms(latency.userFinal, latency.responseStarted),
+      responseStartedToFirstAudio: ms(latency.responseStarted, latency.firstAudio),
+      pushEndToFirstAudio: ms(latency.pushEnd, latency.firstAudio),
+      responseStartedToAudioDone: ms(latency.responseStarted, latency.audioDone),
+    }
     writeFileSync(join(OUT, 'e2e-report.json'), JSON.stringify(report, null, 2))
     log('REPORT', JSON.stringify(report, null, 2))
+    log('LATENCY(ms)', JSON.stringify(report.latencyMs))
     const ok = audio.length >= 24000 * 2 * 0.3 // 至少 0.3 秒语音
     if (!ok) fail('no/too little output audio (' + audio.length + ' bytes)')
     if (!assistantText && !userText) fail('no transcript received')

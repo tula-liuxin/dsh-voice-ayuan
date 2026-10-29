@@ -6,7 +6,8 @@
 //     bg-base、box-shadow 0 3px 14px #00000019、hover/[aria-expanded=true] 换 bg-layer-2、
 //     focus-visible outline 2px brand-primary、pointer:coarse 44。
 //   - 鲸鱼按钮 = ayuan .ay-yuan-bubble：42x42、同 border、radius 50%、shadow 0 3px 14px #00000014。
-//   - 电话按钮 = 这排按钮的第二个槽位：放在闪电左边 gap=8、同垂直中线；没有闪电时放鲸鱼左边。
+//   - 电话按钮 = 这排按钮的第二个槽位：由阿源鲸鱼广播的 anchor 派生（dock 四边 / 非 dock 一排）；
+//     电话不再读页面 DOM 内容做碰撞，也不会因为读不到邻居掉到兜底角（详见 computePhoneSpot 注释）。
 //   - open 态绝不加描边/黑圈（brand-primary 近黑，会变成用户说的「黑边」），只沿用 [aria-expanded] 换底色。
 import { createVoiceSession } from './session.js'
 
@@ -16,6 +17,7 @@ import { createVoiceSession } from './session.js'
 const DEFAULT_BALL = 42
 const COARSE_BALL = 44
 const DEFAULT_GAP = 8
+const STEP = 50 // 电话-闪电-鲸鱼 的槽距（= size42 + gap8；ayuan/leo-quick dock 契约 v2）
 const PAD = 8
 const PANEL_MAX_WIDTH = 360
 const PANEL_GAP = 10
@@ -55,8 +57,16 @@ const CSS = [
   '.va-panel[data-state=error] .va-wave{opacity:.35}.va-panel[data-state=error] .va-wave span{animation:none;height:6px}',
   '.va-panel[data-state=ready] .va-wave{opacity:.7}',
   '@keyframes va-wave{0%,100%{transform:scaleY(.45)}50%{transform:scaleY(2.2)}}',
-  '.va-caption{flex:1 1 auto;min-height:40px;max-height:132px;overflow-y:auto;white-space:pre-wrap;word-break:break-word;font-size:13px;line-height:1.6;color:var(--dsw-alias-label-primary,#0f1115);overflow-wrap:anywhere}',
-  '.va-caption[data-empty=true]{color:var(--dsw-alias-label-tertiary,#81858c);font-size:12px}',
+  // --- 字幕分角色：上「你说」（用户 STT，最近 2 行）+ 下「阿源」（助手回复，最近 4 行） ---
+  '.va-stt{display:flex;flex-direction:column;gap:8px;flex:1 1 auto;min-height:70px}',
+  '.va-stt__block{display:flex;flex-direction:column;gap:2px;min-width:0}',
+  '.va-stt__label{font-size:10px;line-height:14px;font-weight:600;letter-spacing:.02em;color:var(--dsw-alias-label-tertiary,#81858c);flex:none}',
+  '.va-stt__block[data-role=user] .va-stt__label{color:var(--dsw-alias-state-business-primary,#4176e6)}',
+  '.va-stt__text{white-space:pre-wrap;word-break:break-word;overflow-wrap:anywhere;font-size:13px;line-height:1.55;color:var(--dsw-alias-label-primary,#0f1115);display:-webkit-box;-webkit-box-orient:vertical;overflow:hidden}',
+  '.va-stt__block[data-role=user] .va-stt__text{-webkit-line-clamp:2;max-height:calc(1.55em * 2)}',
+  '.va-stt__block[data-role=assistant] .va-stt__text{-webkit-line-clamp:4;max-height:calc(1.55em * 4)}',
+  '.va-stt__text[data-empty=true]{color:var(--dsw-alias-label-tertiary,#81858c);font-size:12px}',
+  '.va-stt__sep{height:1px;background:var(--dsw-alias-border-l2,#0000001a);flex:none;margin:1px 0}',
   '.va-foot{display:flex;align-items:center;gap:8px;flex:none;flex-wrap:wrap}',
   '.va-mic{display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border-radius:999px;border:1px solid var(--dsw-alias-border-l2,#0000001a);background:var(--dsw-alias-bg-layer-1,#fff);color:var(--dsw-alias-label-secondary,#61666b);font-size:11px;line-height:18px;white-space:nowrap}',
   '.va-mic[data-mic=on]{color:var(--dsw-alias-state-success-primary,#2ea043)}',
@@ -157,45 +167,238 @@ export function sameRowState(a, b) {
     sameRect(a.ball, b.ball) && sameRect(a.bubble, b.bubble) && sameRect(a.fallback, b.fallback)
 }
 
+/**
+ * 合并「live 邻居快照」与「上次有效快照」（纯函数，可单测）。
+ * live 里一个邻居都读不到时（兄弟按钮后挂载/卸载/HMR 瞬间、或渲染快照过期），用 last 顶上，
+ * 保证位置计算永远拿得到上一次有效锚点，而不是退化成 null → 掉到兜底角。
+ */
+export function mergeNeighborSnapshot(live, last) {
+  if (!live) return last || null
+  if (live.ball || live.bubble) return live
+  if (!last) return live
+  return Object.assign({}, last, { view: live.view })
+}
+
 // ---------------------------------------------------------------------------
-// 槽位算法（可单测）：phone.left = anchor.left - gap - size，同垂直中线
+// 锚点（阿源鲸鱼广播的 ayuan:launcher-anchor-v1）→ 电话槽位（纯函数，可单测）
+//
+// 契约 v2（ayuan / leo-quick 已实现，2026-10-29）：
+//   anchor = { visible, x, y, width, height, dock: 'left'|'right'|'top'|'bottom'|null, expanded, panelOpen }
+//   - dock left/right：闪电/电话与鲸鱼同 x（贴边方向绝不 clamp，贴边时允许负数/半出屏），
+//     电话 y = clampY(anchor.y - 2*step)，闪电 y = clampY(anchor.y - 1*step)；
+//   - dock top/bottom：闪电/电话与鲸鱼同 y，电话 x = clampX(anchor.x - 2*step)，闪电 x = clampX(anchor.x - 1*step)；
+//   - dock null：电话 = 闪电左边一格（x = anchor.x - 2*step，同中线）；左槽出视口 → 右侧
+//     x = anchor.x + width + gap + step（闪电在 anchor.x + width + gap）。
+// 旧实现靠 elementFromPoint 探测页面内容 + 渲染快照 useRow，会因宿主侧栏 button / 浮层遮挡 / 快照过期
+// 把电话推到 (vw-24-size, vh-24-size) 兜底角（实机 15:19~15:33 多次上报）—— 现在只认 anchor。
 // ---------------------------------------------------------------------------
-export function computeSpot({ anchor = null, phoneSize = DEFAULT_BALL, gap = DEFAULT_GAP, mode = 'row', view, free = null }) {
-  const pad = PAD
-  const maxLeft = Math.max(pad, view.width - phoneSize - pad)
-  const maxTop = Math.max(pad, view.height - phoneSize - pad)
-  const candidates = []
-  const strict = (left, top, m, s) => candidates.push({ left, top, mode: m, side: s, strict: true })
-  if (anchor) {
-    if (mode === 'column') {
-      // column（阿源 dock）：电话直接叠在闪电同一 x、上方一格；上方出界 → 下方一格；再不行才 clamp。
-      strict(anchor.left, anchor.top - gap - phoneSize, 'column', 'above')
-      strict(anchor.left, anchor.bottom + gap, 'column', 'below')
-      candidates.push({
-        left: clamp(anchor.left, pad, maxLeft),
-        top: clamp(anchor.top - gap - phoneSize, pad, maxTop),
-        mode: 'column',
-        side: 'clamped',
-        strict: false,
-      })
-    } else {
-      // row：电话 = 闪电左边一格、同垂直中线。左边真的出界时保持同 gap 放右边；再不行才 dock 兜底。
-      const top = anchor.top + (anchor.height - phoneSize) / 2
-      strict(anchor.left - gap - phoneSize, top, 'row', 'left')
-      strict(anchor.right + gap, top, 'row', 'right')
+export function readAnchorFromEvent(detail) {
+  if (!detail || detail.visible !== true) return null
+  const x = num(detail.x)
+  const y = num(detail.y)
+  const width = num(detail.width)
+  const height = num(detail.height)
+  if (x == null || y == null || width == null || height == null || width <= 0 || height <= 0) return null
+  const dock = ['left', 'right', 'top', 'bottom'].includes(detail.dock) ? detail.dock : null
+  return { visible: true, x, y, width, height, dock, expanded: detail.expanded === true, panelOpen: detail.panelOpen === true }
+}
+
+/** 没有 anchor 事件时（旧版阿源 / 事件丢失）从 DOM 邻居 rect 反推等效 anchor；dock 由半出屏几何推断。 */
+export function anchorFromNeighbors(row, fallback = null) {
+  if (!row || !row.view) return fallback
+  const view = row.view
+  const bubble = row.bubble
+  if (bubble) {
+    const dock = bubble.left <= 0.5 ? 'left'
+      : bubble.left + bubble.width >= view.width - 0.5 ? 'right'
+        : bubble.top <= 0.5 ? 'top'
+          : bubble.top + bubble.height >= view.height - 0.5 ? 'bottom'
+            : null
+    return { visible: true, x: bubble.left, y: bubble.top, width: bubble.width, height: bubble.height, dock, expanded: false, panelOpen: false }
+  }
+  const ball = row.ball
+  if (!ball) return fallback
+  if (ball.left <= 0.5) return { visible: true, x: ball.left, y: ball.top + STEP, width: ball.width, height: ball.height, dock: 'left', expanded: false, panelOpen: false }
+  if (ball.left + ball.width >= view.width - 0.5) return { visible: true, x: ball.left, y: ball.top + STEP, width: ball.width, height: ball.height, dock: 'right', expanded: false, panelOpen: false }
+  if (ball.top <= 0.5) return { visible: true, x: ball.left + STEP, y: ball.top, width: ball.width, height: ball.height, dock: 'top', expanded: false, panelOpen: false }
+  if (ball.top + ball.height >= view.height - 0.5) return { visible: true, x: ball.left + STEP, y: ball.top, width: ball.width, height: ball.height, dock: 'bottom', expanded: false, panelOpen: false }
+  return { visible: true, x: ball.left + STEP, y: ball.top, width: ball.width, height: ball.height, dock: null, expanded: false, panelOpen: false }
+}
+
+export function anchorRect(anchor) {
+  if (!anchor || anchor.visible === false) return null
+  const width = anchor.width
+  const height = anchor.height
+  return {
+    left: anchor.x, top: anchor.y, right: anchor.x + width, bottom: anchor.y + height,
+    width, height, cx: anchor.x + width / 2, cy: anchor.y + height / 2,
+  }
+}
+
+const clampXIn = (value, view, size) => clamp(value, PAD, Math.max(PAD, view.width - size - PAD))
+const clampYIn = (value, view, size) => clamp(value, PAD, Math.max(PAD, view.height - size - PAD))
+
+/**
+ * 电话槽位（纯函数）：只依赖 anchor + 视口，不读页面 DOM。
+ * 返回 { left, top, mode, side, dock, clamped }；anchor 为 null（从未拿到过）返回 null，由 settleSpot 兜底。
+ */
+export function computePhoneSpot({ anchor = null, view, size = DEFAULT_BALL, gap = DEFAULT_GAP, step = STEP, pad = PAD }) {
+  if (!anchor || anchor.visible === false || !view) return null
+  const sizeNow = Number.isFinite(size) && size > 0 ? size : DEFAULT_BALL
+  const anchorWidth = Number.isFinite(anchor.width) ? anchor.width : sizeNow
+  const anchorHeight = Number.isFinite(anchor.height) ? anchor.height : sizeNow
+  const dock = anchor.dock
+  if (dock === 'left' || dock === 'right') {
+    // 贴边方向（x）绝不 clamp：贴边时可以是负数/超视口，就是半出屏。
+    const rawTop = anchor.y - 2 * step
+    const top = clampYIn(rawTop, view, sizeNow)
+    return { left: anchor.x, top, mode: 'dock-vertical', side: 'above', dock, clamped: Math.abs(top - rawTop) > 0.01 }
+  }
+  if (dock === 'top' || dock === 'bottom') {
+    // 贴边方向（y）绝不 clamp。
+    const rawLeft = anchor.x - 2 * step
+    const left = clampXIn(rawLeft, view, sizeNow)
+    return { left, top: anchor.y, mode: 'dock-horizontal', side: 'left', dock, clamped: Math.abs(left - rawLeft) > 0.01 }
+  }
+  const leftSlot = anchor.x - 2 * step
+  const rightSlot = anchor.x + anchorWidth + gap + step
+  const useRight = leftSlot < pad
+  const rawLeft = useRight ? rightSlot : leftSlot
+  const rawTop = anchor.y + (anchorHeight - sizeNow) / 2
+  const left = clampXIn(rawLeft, view, sizeNow)
+  const top = clampYIn(rawTop, view, sizeNow)
+  return {
+    left, top, mode: 'row', side: useRight ? 'right' : 'left', dock: null,
+    clamped: Math.abs(left - rawLeft) > 0.01 || Math.abs(top - rawTop) > 0.01,
+  }
+}
+
+/** 闪电槽位（纯函数，仅用于一致性校验）：按 leo-quick anchorPosition 的同一套公式从 anchor 推导。 */
+export function expectedLightningRect({ anchor = null, view, size = DEFAULT_BALL, gap = DEFAULT_GAP, step = STEP, pad = PAD }) {
+  if (!anchor || anchor.visible === false || !view) return null
+  const sizeNow = Number.isFinite(size) && size > 0 ? size : DEFAULT_BALL
+  const anchorWidth = Number.isFinite(anchor.width) ? anchor.width : sizeNow
+  const anchorHeight = Number.isFinite(anchor.height) ? anchor.height : sizeNow
+  const dock = anchor.dock
+  let left
+  let top
+  if (dock === 'left' || dock === 'right') {
+    left = anchor.x
+    top = clampYIn(anchor.y - step, view, sizeNow)
+  } else if (dock === 'top' || dock === 'bottom') {
+    left = clampXIn(anchor.x - step, view, sizeNow)
+    top = anchor.y
+  } else {
+    const leftCandidate = anchor.x - gap - sizeNow
+    const rightCandidate = anchor.x + anchorWidth + gap
+    const fitsLeft = leftCandidate >= pad
+    const fitsRight = rightCandidate + sizeNow <= view.width - pad
+    const rawLeft = fitsLeft ? leftCandidate : fitsRight ? rightCandidate : anchor.x
+    const rawTop = fitsLeft || fitsRight ? anchor.y : anchor.y - gap - sizeNow
+    left = clampXIn(rawLeft, view, sizeNow)
+    top = clampYIn(rawTop, view, sizeNow)
+  }
+  return {
+    left, top, right: left + sizeNow, bottom: top + sizeNow,
+    width: sizeNow, height: sizeNow, cx: left + sizeNow / 2, cy: top + sizeNow / 2,
+  }
+}
+
+/**
+ * 位置结算（纯函数，可单测）：永远优先贴着邻居，其次保持上一次有效位置，最后才用一次性兜底角。
+ * - live：本次从有效 anchor 算出了槽位 → 采用并记入缓存；
+ * - last：这次读不到 anchor（后挂载/卸载/HMR/事件没来）→ 保持上一次有效位置，绝不跳角落；
+ * - fallback：从启动到现在从未测到过有效位置 → 才允许右下角兜底（并计入 fallbackCount 上报）。
+ */
+export function settleSpot(computed, last, view = null, size = DEFAULT_BALL) {
+  if (computed) {
+    return { left: computed.left, top: computed.top, mode: computed.mode, side: computed.side, dock: computed.dock || null, source: 'live' }
+  }
+  if (last) return { left: last.left, top: last.top, mode: last.mode, side: last.side, dock: last.dock || null, source: 'last' }
+  const v = view || { width: 0, height: 0 }
+  return {
+    left: Math.max(PAD, v.width - 24 - size),
+    top: Math.max(PAD, v.height - 24 - size),
+    mode: 'fallback', side: 'dock', dock: null, source: 'fallback',
+  }
+}
+
+/** 中心点提取：兼容 DOMRect 与 metrics 里的 {x,y,w,h} 两种表示。 */
+function centerOf(rect) {
+  if (!rect) return null
+  const width = Number.isFinite(rect.width) ? rect.width : rect.w
+  const height = Number.isFinite(rect.height) ? rect.height : rect.h
+  if (!Number.isFinite(width) || !Number.isFinite(height)) return null
+  const left = Number.isFinite(rect.left) ? rect.left : rect.x
+  const top = Number.isFinite(rect.top) ? rect.top : rect.y
+  if (!Number.isFinite(left) || !Number.isFinite(top)) return null
+  return { cx: left + width / 2, cy: top + height / 2 }
+}
+
+/**
+ * 掉队检测（纯函数）：电话中心与锚点（鲸鱼/闪电）中心距离 > limit 视为异常。
+ * 实机那次兜底坐标 (1982,1038) 与鲸鱼相距约 1900px —— 必须立刻重算并上报，不能静默忍着。
+ */
+export function detachDistance(phone, anchor, limit = 200) {
+  const a = centerOf(phone)
+  const b = centerOf(anchor)
+  if (!a || !b) return { distance: null, detached: null, limit }
+  const distance = Math.round(Math.hypot(a.cx - b.cx, a.cy - b.cy) * 100) / 100
+  return { distance, detached: distance > limit, limit }
+}
+
+// ---------------------------------------------------------------------------
+// 字幕（分角色）：session.js 上送 {kind, role, content, turnId, replace}
+// ---------------------------------------------------------------------------
+export const TRANSCRIPT_LIMIT = { user: 400, assistant: 900 }
+
+/**
+ * 字幕状态归并（纯函数，可单测）：两块 —— 「你说」= 用户 STT，「阿源」= 助手回复；只保留最近一轮。
+ * - reset（用户打断 / 新 turn 开始）→ 两块一起清空；
+ * - delta → 增量追加（user 的 replace=true 表示整段替换）；
+ * - final → 一般给完整文本：比已显示内容更完整才替换，避免回退闪烁；
+ * - discard → 清掉对应那一块。
+ */
+export function reduceTranscript(state, event) {
+  const base = state && typeof state === 'object'
+    ? state
+    : { user: '', assistant: '', turnId: null, reason: '' }
+  if (!event || typeof event !== 'object') return base
+  if (event.kind === 'reset') {
+    return {
+      user: '',
+      assistant: '',
+      turnId: event.turnId == null ? null : String(event.turnId),
+      reason: String(event.reason || 'reset'),
     }
   }
-  candidates.push({ left: view.width - 24 - phoneSize, top: view.height - 24 - phoneSize, mode: 'row', side: 'dock', strict: false })
-  for (const candidate of candidates) {
-    const left = clamp(candidate.left, pad, maxLeft)
-    const top = clamp(candidate.top, pad, maxTop)
-    const clamped = Math.abs(left - candidate.left) > 0.01 || Math.abs(top - candidate.top) > 0.01
-    if (candidate.strict && clamped) continue
-    if (free && !free(left, top, phoneSize)) continue
-    return { left, top, mode: candidate.mode, side: candidate.side, clamped }
+  const role = event.role === 'user' ? 'user' : event.role === 'assistant' ? 'assistant' : null
+  if (!role) return base
+  if (event.kind === 'discard') {
+    const next = Object.assign({}, base)
+    next[role] = ''
+    return next
   }
-  return { left: maxLeft, top: maxTop, mode: 'row', side: 'dock', clamped: true }
+  if (event.kind !== 'delta' && event.kind !== 'final') return base
+  const content = typeof event.content === 'string' ? event.content : ''
+  const turnId = event.turnId == null ? base.turnId : String(event.turnId)
+  const turnChanged = Boolean(turnId && base.turnId && turnId !== base.turnId)
+  if (!content && !turnChanged) return base
+  const next = turnChanged
+    ? { user: '', assistant: '', turnId, reason: base.reason }
+    : Object.assign({}, base, { turnId })
+  const prev = String(next[role] || '')
+  let value
+  if (event.kind === 'delta') {
+    value = event.replace === true ? content : prev + content
+  } else {
+    value = !prev || event.replace === true || content.startsWith(prev) || content.length >= prev.length ? content : prev
+  }
+  const limit = TRANSCRIPT_LIMIT[role] || 400
+  next[role] = value.length > limit ? value.slice(-limit) : value
+  return next
 }
+
 
 // ---------------------------------------------------------------------------
 // 面板避让算法（可单测）：优先按钮排上方、右缘对齐鲸鱼右缘；被阿源浮层/闪电菜单挡住就换位。
@@ -297,42 +500,64 @@ const cssEqual = (a, b) => normalizeCss(a) === normalizeCss(b)
 export function computeMetrics({
   view, phone = null, phoneStyle = null, ball = null, ballStyle = null,
   bubble = null, bubbleStyle = null, bubbleVisible = true, avoidRects = [], panel = null, panelStyle = null,
-  gap = DEFAULT_GAP,
+  gap = DEFAULT_GAP, anchor = null, anchorSource = null, fallbackCount = 0, step = STEP,
 }) {
-  const bubbleRect = bubbleVisible ? bubble : null
-  const anchor = ball || bubbleRect
-  const anchorStyle = ball ? ballStyle : bubbleRect ? bubbleStyle : null
   const toRect = (r) => (r ? { x: round2(r.left), y: round2(r.top), w: round2(r.width), h: round2(r.height), cx: round2(r.cx), cy: round2(r.cy) } : null)
-  // 布局模式：闪电与鲸鱼中线差 > 20px = column（阿源 dock 分支），否则 row。
-  const mode = ball && bubbleRect ? (Math.abs(ball.cy - bubbleRect.cy) > 20 ? 'column' : 'row') : 'row'
-  const sameRow = mode === 'row' && ball && bubbleRect ? true : ball && bubbleRect ? false : null
-  const gapNeighbor = mode === 'row' && ball && bubbleRect ? round2(bubbleRect.left - ball.right) : null
-  const gapLeft = anchor && phone ? round2(anchor.left - phone.right) : null
-  const centerDeltaY = anchor && phone ? round2(phone.cy - anchor.cy) : null
-  const centerDeltaX = anchor && phone ? round2(phone.cx - anchor.cx) : null
-  let side = null
-  let sideGap = null
-  let columnGap = null
-  if (anchor && phone) {
-    if (mode === 'row') {
-      if (phone.right <= anchor.left + 0.5) side = 'left'
-      else if (phone.left >= anchor.right - 0.5) side = 'right'
-      else side = 'overlap'
-      sideGap = side === 'left' ? round2(anchor.left - phone.right) : side === 'right' ? round2(phone.left - anchor.right) : null
-    } else {
-      if (phone.bottom <= anchor.top + 0.5) side = 'above'
-      else if (phone.top >= anchor.bottom - 0.5) side = 'below'
-      else side = 'overlap'
-      columnGap = side === 'above' ? round2(anchor.top - phone.bottom) : side === 'below' ? round2(phone.top - anchor.bottom) : null
-    }
-  }
-  const sizeDelta = anchor && phone ? { w: round2(phone.width - anchor.width), h: round2(phone.height - anchor.height) } : null
+  const bubbleRect = bubbleVisible ? bubble : null
+  // 锚点：优先用事件（带 dock/expanded）；没事件时从 DOM 邻居反推（旧版兄弟插件也能测）。
+  const liveAnchor = anchor && anchor.visible !== false ? anchor : null
+  const effectiveAnchor = liveAnchor || anchorFromNeighbors({ ball, bubble: bubbleRect, view })
+  const anchorBox = anchorRect(effectiveAnchor)
+  const dock = effectiveAnchor ? (effectiveAnchor.dock || null) : null
+  const mode = dock === 'left' || dock === 'right' ? 'dock-vertical'
+    : dock === 'top' || dock === 'bottom' ? 'dock-horizontal'
+      : 'row'
+  const phoneSize = phone && Number.isFinite(phone.width) && phone.width > 0 ? phone.width : DEFAULT_BALL
+  const expected = effectiveAnchor ? computePhoneSpot({ anchor: effectiveAnchor, view, size: phoneSize, gap, step }) : null
+  const lightningExpected = effectiveAnchor ? expectedLightningRect({ anchor: effectiveAnchor, view, size: phoneSize, gap, step }) : null
+  const lightningBox = ball
+  const anchorStyle = ball ? ballStyle : bubbleRect ? bubbleStyle : null
   const styleParity = phoneStyle && anchorStyle ? {
     borderRadius: cssEqual(phoneStyle.borderRadius, anchorStyle.borderRadius),
     borderWidth: cssEqual(phoneStyle.borderWidth, anchorStyle.borderWidth),
     borderColor: cssEqual(phoneStyle.borderColor, anchorStyle.borderColor),
     boxShadow: cssEqual(phoneStyle.boxShadow, anchorStyle.boxShadow),
   } : null
+  const sizeDelta = anchorBox && phone ? { w: round2(phone.width - anchorBox.width), h: round2(phone.height - anchorBox.height) } : null
+  const expectedDelta = phone && expected ? { x: round2(phone.left - expected.left), y: round2(phone.top - expected.top) } : null
+  const lightningDelta = lightningBox && lightningExpected
+    ? { x: round2(lightningBox.left - lightningExpected.left), y: round2(lightningBox.top - lightningExpected.top) }
+    : null
+  const dockFixedX = mode === 'dock-vertical' && phone && anchorBox ? round2(phone.left - anchorBox.left) : null
+  const dockFixedY = mode === 'dock-horizontal' && phone && anchorBox ? round2(phone.top - anchorBox.top) : null
+  // 电话与闪电的相邻间隙：三种布局都应是 gap（dock 时电话在闪电再往外一格，still gap=8）。
+  const stackGap = (() => {
+    if (!lightningBox || !phone) return null
+    if (mode === 'dock-vertical') return round2(phone.top <= lightningBox.top ? lightningBox.top - phone.bottom : phone.top - lightningBox.bottom)
+    if (mode === 'dock-horizontal') return round2(phone.left <= lightningBox.left ? lightningBox.left - phone.right : phone.left - lightningBox.right)
+    const leftGap = round2(lightningBox.left - phone.right)
+    const rightGap = round2(phone.left - lightningBox.right)
+    return Math.abs(leftGap) <= Math.abs(rightGap) ? leftGap : rightGap
+  })()
+  // Lead 契约里的台阶：dock 竖排 |phone.top - lightning.top| = step；dock 横排 |phone.left - lightning.left| = step。
+  const lightningStep = (() => {
+    if (!lightningBox || !phone) return null
+    if (mode === 'dock-vertical') return round2(phone.top - lightningBox.top)
+    if (mode === 'dock-horizontal') return round2(phone.left - lightningBox.left)
+    return null
+  })()
+  const overlapAnchor = anchorBox && phone ? intersectArea(phone, anchorBox) : null
+  const inViewportOk = (() => {
+    if (!phone) return null
+    if (mode === 'row') return insideViewport(phone, view)
+    if (mode === 'dock-vertical') {
+      // 贴边方向（x）允许半出屏；纵向必须完整在视口内。
+      return phone.top >= -0.01 && phone.bottom <= view.height + 0.01 && phone.right > 0 && phone.left < view.width
+    }
+    return phone.left >= -0.01 && phone.right <= view.width + 0.01 && phone.bottom > 0 && phone.top < view.height
+  })()
+  const panelOverflow = panel ? !insideViewport(panel, view) : null
+  const detach = phone && anchorBox ? detachDistance(phone, anchorBox) : { distance: null, detached: null, limit: 200 }
   const phoneOverlaps = {}
   for (const item of avoidRects) {
     const kind = item && item.kind ? item.kind : 'avoid'
@@ -343,56 +568,63 @@ export function computeMetrics({
     const kind = item && item.kind ? item.kind : 'avoid'
     panelOverlaps[kind] = panel ? round2(intersectArea(panel, item.rect || item)) : 0
   }
-  const overlapAnchor = anchor && phone ? intersectArea(phone, anchor) : null
-  const overlapBubble = bubbleRect && phone && anchor !== bubbleRect ? intersectArea(phone, bubbleRect) : 0
-  const overflow = phone ? !insideViewport(phone, view) : null
-  const panelOverflow = panel ? !insideViewport(panel, view) : null
-  const gapConsistent = (() => {
-    if (!phone || !anchor) return null
-    if (mode === 'row') {
-      if (sideGap == null) return false
-      const expected = sameRow && gapNeighbor != null && side === 'left' ? gapNeighbor : gap
-      return Math.abs(sideGap - expected) <= 0.5
-    }
-    if (columnGap == null) return false
-    return Math.abs(columnGap - gap) <= 0.5
-  })()
+  const expectedSlot = expectedDelta ? Math.abs(expectedDelta.x) <= 0.5 && Math.abs(expectedDelta.y) <= 0.5 : null
+  const sameBaseline = mode === 'row' && expectedDelta ? Math.abs(expectedDelta.y) <= 0.5 : null
   const invariants = {
     sameSize: sizeDelta ? Math.abs(sizeDelta.w) <= 0.5 && Math.abs(sizeDelta.h) <= 0.5 : null,
-    sameBaseline: mode === 'row' && centerDeltaY != null ? Math.abs(centerDeltaY) <= 0.5 : null,
-    sameCenterX: mode === 'column' && centerDeltaX != null ? Math.abs(centerDeltaX) <= 0.5 : null,
-    gapConsistent,
     styleParity: styleParity ? Object.values(styleParity).every(Boolean) : null,
-    noOverlap: anchor && phone ? overlapAnchor <= 0.5 && overlapBubble <= 0.5 : null,
-    inViewport: overflow == null ? null : !overflow,
+    expectedSlot,
+    sameBaseline,
+    dockFixedX: dockFixedX == null ? null : Math.abs(dockFixedX) <= 0.5,
+    dockFixedY: dockFixedY == null ? null : Math.abs(dockFixedY) <= 0.5,
+    stackGap: stackGap == null ? null : Math.abs(stackGap - gap) <= 0.5,
+    lightningStep: lightningStep == null ? null : Math.abs(Math.abs(lightningStep) - step) <= 0.5,
+    noOverlap: overlapAnchor == null ? null : overlapAnchor <= 0.5,
+    inViewport: inViewportOk == null ? null : inViewportOk,
+    anchorNearby: detach.detached == null ? null : !detach.detached,
     panelNoOverlapFloat: panel ? (panelOverlaps.float || 0) <= 0.5 : null,
     panelNoOverlapMenu: panel ? (panelOverlaps.menu || 0) <= 0.5 : null,
     panelInViewport: panelOverflow == null ? null : !panelOverflow,
   }
   const required = Object.keys(invariants).filter((key) => invariants[key] !== null)
   const pass = required.every((key) => invariants[key] === true)
+  const source = anchorSource || (liveAnchor ? 'event' : effectiveAnchor ? 'derived' : null)
   return {
     at: Date.now(),
     viewport: { width: round2(view.width), height: round2(view.height) },
     mode,
-    side,
-    sameRow,
+    dock,
+    side: expected ? expected.side : null,
     bubbleVisible,
+    anchor: effectiveAnchor ? {
+      rect: toRect(anchorBox),
+      dock,
+      expanded: effectiveAnchor.expanded === true,
+      panelOpen: effectiveAnchor.panelOpen === true,
+      source,
+    } : null,
+    anchorSource: source,
+    fallbackCount,
     phone: phone ? { rect: toRect(phone), style: compactStyle(phoneStyle) } : null,
     lightning: ball ? { rect: toRect(ball), style: compactStyle(ballStyle) } : null,
     bubble: bubble ? { rect: toRect(bubble), style: compactStyle(bubbleStyle), visible: bubbleVisible } : null,
     gap: round2(gap),
-    gapLeft,
-    gapNeighbor,
-    sideGap,
-    columnGap,
-    centerDeltaY,
-    centerDeltaX,
+    step: round2(step),
+    expectedPhone: expected ? { left: round2(expected.left), top: round2(expected.top), mode: expected.mode, side: expected.side } : null,
+    expectedDelta,
+    lightningExpected: lightningExpected ? toRect(lightningExpected) : null,
+    lightningDelta,
+    dockFixedX,
+    dockFixedY,
+    stackGap,
+    lightningStep,
     sizeDelta,
     styleParity,
     phoneOverlaps,
     panel: panel ? { rect: toRect(panel), style: compactStyle(panelStyle), overlaps: panelOverlaps, maxHeight: panelStyle ? panelStyle.maxHeight : null } : null,
-    overflow: overflow == null ? null : overflow,
+    overflow: inViewportOk == null ? null : !inViewportOk,
+    anchorDistance: detach.distance,
+    detachLimit: detach.limit,
     invariants,
     pass,
   }
@@ -431,28 +663,13 @@ function readAvoidRects(doc, win) {
   return out
 }
 
-// 候选位置碰撞检测：用 elementFromPoint 扫五个点；命中别的按钮/阿源浮层/闪电菜单视为占用。
-function freeAt(doc, left, top, size, selfEl) {
-  if (typeof doc.elementFromPoint !== 'function') return true
-  const points = [[0.5, 0.5], [0.2, 0.2], [0.8, 0.2], [0.2, 0.8], [0.8, 0.8]]
-  for (const [fx, fy] of points) {
-    let el = null
-    try {
-      el = doc.elementFromPoint(left + size * fx, top + size * fy)
-    } catch {
-      continue
-    }
-    if (!el) continue
-    if (selfEl && (el === selfEl || selfEl.contains(el))) continue
-    const closest = el.closest ? el.closest.bind(el) : null
-    if (!closest) continue
-    if (closest('.va-phone, .va-panel')) continue
-    if (closest('button, [role="button"], .ay-yuan-float, .lq-menu, .lq-root')) return false
-  }
-  return true
-}
+// 说明：位置计算不再用 elementFromPoint 探测页面内容（会把宿主侧栏/阿源浮层误判成占用，
+// 导致电话失去贴邻居的槽位、掉到右下角被浮层挡住）；现在只由 computePhoneSpot(anchor) 派生。
+
+const BUILD_TAG = 'ui2-dock4-stt-1'
 
 function reportMetrics(payload) {
+  payload.buildTag = BUILD_TAG
   try {
     fetch(REPORT_URL, {
       method: 'POST',
@@ -469,23 +686,30 @@ const fmt = (value) => (value == null || !Number.isFinite(Number(value)) ? '—'
 export function formatMetricsLine(metrics) {
   if (!metrics) return '测量中…'
   const inv = metrics.invariants || {}
+  const delta = metrics.expectedDelta || {}
+  const mode = metrics.mode || 'row'
   const sizeText = fmt(metrics.sizeDelta && metrics.sizeDelta.w) + '×' + fmt(metrics.sizeDelta && metrics.sizeDelta.h)
-  const mode = metrics.mode === 'column' ? 'column' : 'row'
   const problems = []
   let base
-  if (mode === 'column') {
-    base = '竖排 · X 偏差 ' + fmt(metrics.centerDeltaX) + 'px · 竖间距 ' + fmt(metrics.columnGap) + 'px · 尺寸差 ' + sizeText
-    if (inv.sameCenterX === false) problems.push('X 偏差 ' + fmt(metrics.centerDeltaX) + 'px 超差')
-    if (inv.gapConsistent === false) problems.push('竖间距 ' + fmt(metrics.columnGap) + 'px ≠ ' + fmt(metrics.gap) + 'px')
+  if (mode === 'dock-vertical') {
+    base = '贴边竖排 · 与鲸鱼 X 偏差 ' + fmt(metrics.dockFixedX) + 'px · 与闪电台阶 ' + fmt(metrics.lightningStep) + 'px · 尺寸差 ' + sizeText
+    if (inv.dockFixedX === false) problems.push('与鲸鱼 X 偏差 ' + fmt(metrics.dockFixedX) + 'px 超差')
+    if (inv.lightningStep === false) problems.push('与闪电台阶 ' + fmt(metrics.lightningStep) + 'px ≠ ' + fmt(metrics.step) + 'px')
+  } else if (mode === 'dock-horizontal') {
+    base = '贴边横排 · 与鲸鱼 Y 偏差 ' + fmt(metrics.dockFixedY) + 'px · 与闪电台阶 ' + fmt(metrics.lightningStep) + 'px · 尺寸差 ' + sizeText
+    if (inv.dockFixedY === false) problems.push('与鲸鱼 Y 偏差 ' + fmt(metrics.dockFixedY) + 'px 超差')
+    if (inv.lightningStep === false) problems.push('与闪电台阶 ' + fmt(metrics.lightningStep) + 'px ≠ ' + fmt(metrics.step) + 'px')
   } else {
-    base = '对齐 ΔY ' + fmt(metrics.centerDeltaY) + 'px · 间距 ' + fmt(metrics.sideGap) + '/' + fmt(metrics.gapNeighbor) + ' · 尺寸差 ' + sizeText
-    if (inv.sameBaseline === false) problems.push('对齐 ΔY ' + fmt(metrics.centerDeltaY) + 'px 超差')
-    if (inv.gapConsistent === false) problems.push('间距 ' + fmt(metrics.sideGap) + 'px ≠ ' + fmt(metrics.gapNeighbor != null ? metrics.gapNeighbor : metrics.gap) + 'px')
+    base = '一排 · 槽位偏差 (' + fmt(delta.x) + ', ' + fmt(delta.y) + ') · 与闪电间隙 ' + fmt(metrics.stackGap) + 'px · 尺寸差 ' + sizeText
+    if (inv.sameBaseline === false) problems.push('同一中线偏差 ' + fmt(delta.y) + 'px 超差')
   }
+  if (inv.expectedSlot === false) problems.push('偏离锚点槽位 (' + fmt(delta.x) + ', ' + fmt(delta.y) + ')px')
+  if (inv.stackGap === false) problems.push('与闪电间隙 ' + fmt(metrics.stackGap) + 'px ≠ ' + fmt(metrics.gap) + 'px')
   if (inv.sameSize === false) problems.push('尺寸差 ' + sizeText + 'px')
   if (inv.styleParity === false) problems.push('边框/阴影与闪电不一致')
   if (inv.noOverlap === false) problems.push('按钮互相压叠')
   if (inv.inViewport === false) problems.push('按钮超出视口')
+  if (inv.anchorNearby === false) problems.push('按钮掉队（距锚点 ' + fmt(metrics.anchorDistance) + 'px）')
   if (inv.panelNoOverlapFloat === false) problems.push('面板压住阿源浮层')
   if (inv.panelNoOverlapMenu === false) problems.push('面板压住闪电菜单')
   if (inv.panelInViewport === false) problems.push('面板超出视口')
@@ -534,10 +758,17 @@ export function createLauncher({ React, h }) {
 
   function useRow() {
     const [row, setRow] = useState(() => readNeighbors(document, window))
+    const refresh = useCallback(() => {
+      const next = readNeighbors(document, window)
+      setRow((prev) => mergeNeighborSnapshot(next, prev) || next)
+      return next
+    }, [])
     useEffect(() => {
       let raf = 0
+      let stopped = false
       let last = null
       const tick = () => {
+        if (stopped) return
         const next = readNeighbors(document, window)
         if (!last || !sameRowState(next, last)) {
           last = next
@@ -546,18 +777,22 @@ export function createLauncher({ React, h }) {
         raf = requestAnimationFrame(tick)
       }
       tick()
-      return () => cancelAnimationFrame(raf)
+      // rAF 在个别 Electron 场景会停摆/被节流（实机「渲染快照过期、位置掉到兜底角」的教训），
+      // 再加一层 200ms 定时器，保证邻居位置变化总能进入渲染。
+      const interval = setInterval(tick, 200)
+      return () => { stopped = true; cancelAnimationFrame(raf); clearInterval(interval) }
     }, [])
-    return row
+    return [row, refresh]
   }
 
-  function VoicePanel({ onClose, row, metrics, bubbleVisible }) {
+  function VoicePanel({ onClose, row, metrics, bubbleVisible, anchorRect = null }) {
     const [state, setState] = useState('connecting')
     const [mic, setMic] = useState('opening')
     const [step, setStep] = useState('init')
     const [detail, setDetail] = useState('')
     const [diag, setDiag] = useState('')
-    const [caption, setCaption] = useState('')
+    // 字幕分角色：你说 = 用户 STT（role=user），阿源 = 助手回复（role=assistant）；只保留最近一轮。
+    const [transcript, setTranscript] = useState(() => ({ user: '', assistant: '', turnId: null, reason: '' }))
     const [box, setBox] = useState(null)
     const panelRef = useRef(null)
     const sessionRef = useRef(null)
@@ -578,7 +813,7 @@ export function createLauncher({ React, h }) {
         onState: setState,
         onStep: setStep,
         onDetail: setDetail,
-        onCaption: (delta) => setCaption((prev) => (prev + delta).slice(-240)),
+        onTranscript: (event) => setTranscript((prev) => reduceTranscript(prev, event)),
         onMic: setMic,
         onDiag: setDiag,
       })
@@ -598,7 +833,7 @@ export function createLauncher({ React, h }) {
       const rowNow = bubbleVisibleRef.current === false ? Object.assign({}, rawRow, { bubble: null, sameRow: false }) : rawRow
       const avoid = readAvoidRects(document, window)
       const phoneRect = rectFromElement(document.querySelector('.va-phone'))
-      const rowRects = [rowNow.ball, rowNow.bubble, phoneRect].filter(Boolean)
+      const rowRects = [rowNow.ball, rowNow.bubble, phoneRect, anchorRect].filter(Boolean)
       const height = el.getBoundingClientRect().height || 280
       const next = placePanel({
         row: rowNow, view, width: PANEL_MAX_WIDTH, height, avoidRects: avoid, rowRects,
@@ -631,7 +866,7 @@ export function createLauncher({ React, h }) {
     }, [])
 
     // 诚实标题：上游未就绪时显示「正在连接语音服务…」，不再把「等上游」显示成「通话中」。
-    const voiceStatus = deriveVoiceStatus({ state, step, detail, mic, caption })
+    const voiceStatus = deriveVoiceStatus({ state, step, detail, mic, caption: transcript.user || transcript.assistant })
     const dotLabel = voiceStatus.title
     const subLabel = voiceStatus.sub
     const displayState = voiceStatus.tone
@@ -672,8 +907,16 @@ export function createLauncher({ React, h }) {
       }, '×')),
     h('div', { className: 'va-wave', 'aria-hidden': true },
       h('span', null), h('span', null), h('span', null), h('span', null), h('span', null)),
-    h('div', { className: 'va-caption', 'data-empty': caption ? 'false' : 'true' },
-      caption || '对着电脑说话，阿源会实时回应。'),
+    h('div', { className: 'va-stt' },
+      h('div', { className: 'va-stt__block', 'data-role': 'user' },
+        h('span', { className: 'va-stt__label' }, '你说'),
+        h('div', { className: 'va-stt__text', 'data-empty': transcript.user ? 'false' : 'true' },
+          transcript.user || '等你说话…')),
+      h('div', { className: 'va-stt__sep', 'aria-hidden': true }),
+      h('div', { className: 'va-stt__block', 'data-role': 'assistant' },
+        h('span', { className: 'va-stt__label' }, '阿源'),
+        h('div', { className: 'va-stt__text', 'data-empty': transcript.assistant ? 'false' : 'true' },
+          transcript.assistant || '阿源会在这里回应'))),
     h('div', { className: 'va-foot' },
       h('span', { className: 'va-mic', 'data-mic': mic }, '🎙 ' + micLabel),
       voiceStatus.retry ? h('button', {
@@ -684,6 +927,10 @@ export function createLauncher({ React, h }) {
     h('details', { className: 'va-diag', open: true },
       h('summary', null, '诊断' + (pass === false ? '（不变量 FAIL）' : pass === true ? '（PASS）' : '')),
       h('div', { className: 'va-diag__line' }, 'step: ' + step),
+      h('div', { className: 'va-diag__line' }, 'anchor: ' + (metrics && metrics.anchorSource ? metrics.anchorSource : 'none') +
+        (metrics && metrics.dock ? ' · dock ' + metrics.dock : '') +
+        ' · 兜底×' + (metrics && Number.isFinite(metrics.fallbackCount) ? metrics.fallbackCount : 0) +
+        ' · 距锚点 ' + fmt(metrics && metrics.anchorDistance) + 'px'),
       detail ? h('div', { className: 'va-diag__error' }, detail) : null,
       diag ? h('div', { className: 'va-diag__line' }, diag) : null))
   }
@@ -698,39 +945,79 @@ export function createLauncher({ React, h }) {
     const movedRef = useRef(false)
     const lastReportRef = useRef({ at: 0, key: '' })
     const failStreakRef = useRef({ key: '', count: 0, firstAt: 0 })
-    const row = useRow()
-    // 阿源广播 visible：鲸鱼卸载/隐藏时退到底部右侧 row 兜底（协议 ayuan:launcher-anchor-v1）。
+    const [rowState, refreshRow] = useRow()
+    // 锚点：ayuan 广播 {x,y,width,height,dock,expanded}。位置只认 anchor，不读页面 DOM 里有什么 UI。
+    const anchorEventRef = useRef(null)
+    const lastAnchorRef = useRef(null)
+    const lastNeighborRef = useRef(null)
+    const lastSpotRef = useRef(null)
+    const spotSourceRef = useRef('none')
+    const fallbackCountRef = useRef(0)
+    const anchorSourceRef = useRef('none')
+    const [anchorTick, setAnchorTick] = useState(0)
     const [bubbleVisible, setBubbleVisible] = useState(true)
     useEffect(() => {
       const onAnchor = (event) => {
         const detail = event && event.detail
         if (!detail || typeof detail.visible !== 'boolean') return
         setBubbleVisible(detail.visible !== false)
+        if (detail.visible === false) return
+        const next = readAnchorFromEvent(detail)
+        if (!next) return
+        anchorEventRef.current = next
+        lastAnchorRef.current = next
+        setAnchorTick((value) => (value + 1) % 1000000)
       }
       window.addEventListener('ayuan:launcher-anchor-v1', onAnchor)
       try { window.dispatchEvent(new Event('leo-quick:anchor-request-v1')) } catch {}
       return () => window.removeEventListener('ayuan:launcher-anchor-v1', onAnchor)
     }, [])
+    // 每次渲染都从 live DOM 读邻居（兄弟按钮位置；旧版兄弟插件没有 anchor 事件时用来反推锚点）。
+    const liveNeighbors = readNeighbors(document, window)
+    if (liveNeighbors && (liveNeighbors.ball || liveNeighbors.bubble)) lastNeighborRef.current = liveNeighbors
+    const row = mergeNeighborSnapshot(liveNeighbors, lastNeighborRef.current) ||
+      rowState || { ball: null, bubble: null, sameRow: false, gap: DEFAULT_GAP, view: { width: innerWidth, height: innerHeight }, fallback: null }
     const coarse = (() => {
       try { return window.matchMedia('(pointer:coarse)').matches } catch { return false }
     })()
-    const phoneSize = row.ball ? Math.max(28, Math.round(row.ball.width)) : (coarse ? COARSE_BALL : DEFAULT_BALL)
+    // 位置来源：DOM 的 x/y 最新（拖动/展开即时生效），dock/expanded 只信事件（DOM 推不出来）。
+    const domAnchor = anchorFromNeighbors(row, null)
+    const eventAnchor = anchorEventRef.current
+    let anchor = null
+    if (domAnchor) {
+      anchor = eventAnchor
+        ? Object.assign({}, eventAnchor, { x: domAnchor.x, y: domAnchor.y, width: domAnchor.width, height: domAnchor.height })
+        : domAnchor
+    } else if (eventAnchor && bubbleVisible) {
+      anchor = eventAnchor
+    }
+    let anchorSource = 'none'
+    if (anchor) {
+      anchorSource = 'live'
+      lastAnchorRef.current = anchor
+    } else if (lastAnchorRef.current) {
+      anchor = lastAnchorRef.current
+      anchorSource = 'last'
+    }
+    anchorSourceRef.current = anchorSource
+    const view = row.view
+    const phoneSize = anchor && Number.isFinite(anchor.width) && anchor.width > 0
+      ? Math.max(28, Math.round(anchor.width))
+      : row.ball ? Math.max(28, Math.round(row.ball.width)) : (coarse ? COARSE_BALL : DEFAULT_BALL)
+    const computed = computePhoneSpot({ anchor, view, size: phoneSize, gap: row.gap })
+    const settled = settleSpot(computed, lastSpotRef.current, view, phoneSize)
+    if (settled.source === 'live') {
+      lastSpotRef.current = { left: settled.left, top: settled.top, mode: settled.mode, side: settled.side, dock: settled.dock }
+    } else if (settled.source === 'fallback' && spotSourceRef.current !== 'fallback') {
+      fallbackCountRef.current += 1
+    }
+    spotSourceRef.current = settled.source
+    // 本地拖动位移只在「从来没有过锚点」时生效；一旦锚点可用，历史 offset 全部忽略（实机 15:22:57 的错位来源）。
+    const localOnly = settled.source === 'fallback'
+    const left = localOnly ? clamp(settled.left + offset.dx, 4, Math.max(4, view.width - phoneSize - 4)) : settled.left
+    const top = localOnly ? clamp(settled.top + offset.dy, 4, Math.max(4, view.height - phoneSize - 4)) : settled.top
     const bubbleRect = bubbleVisible ? row.bubble : null
-    // row = 闪电与鲸鱼同排（电话占闪电左边一格）；column = 闪电在鲸鱼上方/下方（阿源 dock 分支，电话叠在闪电正上方）。
-    const layoutMode = row.ball && bubbleRect ? (row.sameRow ? 'row' : 'column') : 'row'
-    const anchorRect = row.ball || bubbleRect || row.fallback
-
-    const spot = computeSpot({
-      anchor: anchorRect,
-      phoneSize,
-      gap: row.gap,
-      mode: layoutMode,
-      view: row.view,
-      free: (left, top, size) => freeAt(document, left, top, size, phoneRef.current),
-    })
-    const left = clamp(spot.left + offset.dx, 4, Math.max(4, row.view.width - phoneSize - 4))
-    const top = clamp(spot.top + offset.dy, 4, Math.max(4, row.view.height - phoneSize - 4))
-
+    const anchorBox = anchorRect(anchor)
     // 有鲸鱼时拖动交给 leo-quick 协议（阿源会移动鲸鱼，整排跟着走）；没有鲸鱼时允许本地拖动兜底。
     const hasBubble = !!bubbleRect
     useEffect(() => { if (hasBubble && (offset.dx || offset.dy)) setOffset({ dx: 0, dy: 0 }) }, [hasBubble, offset.dx, offset.dy])
@@ -833,6 +1120,9 @@ export function createLauncher({ React, h }) {
         panel: rectFromElement(panelEl),
         panelStyle: readBoxStyle(window, panelEl),
         gap: row.gap,
+        anchor: lastAnchorRef.current,
+        anchorSource: anchorSourceRef.current,
+        fallbackCount: fallbackCountRef.current,
       })
       try {
         window.__voiceAyuanMetrics = next
@@ -896,6 +1186,19 @@ export function createLauncher({ React, h }) {
       if (current.count >= 2 && now - current.firstAt >= 500) report('invariants-failed', metrics)
     }, [metrics, report])
 
+    // 掉队自愈：电话与锚点中心距离 >200px 时立刻用 live DOM 重算并上报一次（保持证据可定位）。
+    useEffect(() => {
+      if (!metrics || !metrics.phone) return
+      if (metrics.anchorDistance == null || metrics.anchorDistance <= 200) return
+      refreshRow()
+      report('anchor-detached', metrics)
+    }, [metrics, refreshRow, report])
+    // 从未拿到过锚点（兄弟按钮都没挂载）→ 明确上报，别让兜底态被当成正常。
+    useEffect(() => {
+      if (!metrics) return
+      if (metrics.anchorSource === 'none' && metrics.fallbackCount > 0) report('anchor-missing', metrics)
+    }, [metrics, report])
+
     const phoneStyle = Object.assign({
       left, top, width: phoneSize, height: phoneSize, zIndex: BUTTON_Z,
     }, stylePatch || {})
@@ -910,6 +1213,12 @@ export function createLauncher({ React, h }) {
         'aria-label': '阿源语音通话',
         'aria-expanded': open,
         'data-ayuan-ignore-origin': '',
+        onPointerEnter: () => {
+          try { window.dispatchEvent(new CustomEvent('leo-quick:dock-reveal-v1', { detail: { active: true } })) } catch {}
+        },
+        onPointerLeave: () => {
+          try { window.dispatchEvent(new CustomEvent('leo-quick:dock-reveal-v1', { detail: { active: false } })) } catch {}
+        },
         onPointerDown, onPointerMove, onPointerUp, onPointerCancel,
         onClick,
         style: phoneStyle,
@@ -924,6 +1233,7 @@ export function createLauncher({ React, h }) {
         row,
         metrics,
         bubbleVisible,
+        anchorRect: anchorBox,
       }) : null)
   }
 

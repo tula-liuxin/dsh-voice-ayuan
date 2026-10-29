@@ -261,6 +261,7 @@ export function createVoiceSession({
   onStep = () => {},
   onDetail = () => {},
   onCaption = () => {},
+  onTranscript = () => {},
   onMic = () => {},
   onDiag = () => {},
   onLog = () => {},
@@ -513,6 +514,80 @@ export function createVoiceSession({
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // 转写（分角色）：把网关的 transcript.delta/final/discard 归并成视图层能直接用的分段事件。
+  // - 用户 STT：role=user（让用户看到自己的话被识别成什么）；
+  // - 助手回复：role=assistant。
+  // 按 turnId 切轮：新一轮开始（turn.started 或首个新 turnId 的转写）→ reset，只保留最近一轮。
+  // replace=true 表示该条内容是整段替换而不是增量追加（见 qwen-audio-agent TUI 的 user delta 处理）。
+  // ---------------------------------------------------------------------------
+  const transcriptState = { turnId: null, phase: 'idle', user: '', assistant: '' }
+  const emitTranscript = (payload) => {
+    try { onTranscript(payload) } catch {}
+  }
+  const beginTranscriptTurn = (rawTurnId, reason) => {
+    if (rawTurnId == null || rawTurnId === '') return false
+    const turnId = String(rawTurnId)
+    if (turnId === transcriptState.turnId) return false
+    transcriptState.turnId = turnId
+    transcriptState.phase = 'idle'
+    transcriptState.user = ''
+    transcriptState.assistant = ''
+    emitTranscript({ kind: 'reset', reason: reason || 'new-turn', turnId })
+    return true
+  }
+  const transcriptRole = (event) => (event.role === 'user' ? 'user' : event.role === 'assistant' ? 'assistant' : null)
+  const transcriptTurnId = (event) => (event.turnId == null || event.turnId === '' ? null : String(event.turnId))
+  const handleTranscriptDelta = (event) => {
+    const role = transcriptRole(event)
+    const content = typeof event.content === 'string' ? event.content : ''
+    if (!role || !content) return
+    const turnId = transcriptTurnId(event)
+    beginTranscriptTurn(turnId, 'transcript-turn')
+    // 上游没给 turnId 时：用户再次开口（上一段是助手）视为新一轮，清掉上一轮。
+    if (!turnId && role === 'user' && transcriptState.phase === 'assistant') {
+      transcriptState.phase = 'idle'
+      transcriptState.user = ''
+      transcriptState.assistant = ''
+      emitTranscript({ kind: 'reset', reason: 'user-turn' })
+    }
+    transcriptState.phase = role
+    if (role === 'user') {
+      transcriptState.user = (event.replace === true ? content : transcriptState.user + content).slice(-4000)
+      stats.captions += 1
+      emitTranscript({ kind: 'delta', role, content, replace: event.replace === true, turnId })
+      return
+    }
+    transcriptState.assistant = (transcriptState.assistant + content).slice(-8000)
+    stats.captions += 1
+    emitTranscript({ kind: 'delta', role, content, turnId })
+    onCaption(content)
+  }
+  const handleTranscriptFinal = (event) => {
+    const role = transcriptRole(event)
+    if (!role) return
+    const content = typeof event.content === 'string' ? event.content.trim() : ''
+    const turnId = transcriptTurnId(event)
+    beginTranscriptTurn(turnId, 'transcript-turn')
+    if (role === 'user' && content) transcriptState.user = content.slice(-4000)
+    if (role === 'assistant' && content) transcriptState.assistant = content.slice(-8000)
+    emitTranscript({ kind: 'final', role, content, turnId })
+    if (role === 'assistant' && content) onCaption(content)
+  }
+  const handleTranscriptDiscard = (event) => {
+    const role = transcriptRole(event)
+    if (!role) return
+    if (role === 'user') transcriptState.user = ''
+    else transcriptState.assistant = ''
+    emitTranscript({ kind: 'discard', role, turnId: transcriptTurnId(event) })
+  }
+  const resetTranscript = (reason) => {
+    transcriptState.phase = 'idle'
+    transcriptState.user = ''
+    transcriptState.assistant = ''
+    emitTranscript({ kind: 'reset', reason: reason || 'reset' })
+  }
+
   const handleEvent = (event) => {
     if (disposed || !event || typeof event.type !== 'string') return
     stats.events += 1
@@ -549,20 +624,14 @@ export function createVoiceSession({
         if (event.responseId) markPlaybackCancelled(event.responseId, 'interrupted')
         onStep('响应已被打断')
         break
-      case 'transcript.delta': {
-        if (event.role === 'assistant' && typeof event.content === 'string' && event.content) {
-          stats.captions += 1
-          onCaption(event.content)
-        }
+      case 'transcript.delta':
+        handleTranscriptDelta(event)
         break
-      }
-      case 'transcript.final': {
-        if (event.role === 'assistant' && stats.captions === 0 && typeof event.content === 'string' && event.content) {
-          onCaption(event.content)
-        }
+      case 'transcript.final':
+        handleTranscriptFinal(event)
         break
-      }
       case 'transcript.discard':
+        handleTranscriptDiscard(event)
         break
       case 'voice.ready': {
         const rate = Number(event.inputSampleRate)
@@ -590,6 +659,7 @@ export function createVoiceSession({
         onStep('voice ownership ' + String(event.state || '?'))
         break
       case 'turn.started':
+        beginTranscriptTurn(event.turnId, 'turn-started')
         onStep('turn ' + String(event.turnId || '').slice(0, 40))
         break
       case 'input.suspend':
@@ -629,6 +699,7 @@ export function createVoiceSession({
     if (client) {
       try { client.send({ type: 'response.cancel' }) } catch {}
     }
+    resetTranscript('barge-in')
     onStep('barge-in · 用户说话，已清空播放并发送 response.cancel')
     postReport('voice-barge-in')
   }

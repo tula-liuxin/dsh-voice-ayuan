@@ -1,10 +1,13 @@
+import { fileURLToPath } from 'node:url'
 import { GatewayProcess } from './lib/gateway.js'
+import { createVoiceBridge } from './lib/bridge.js'
 import { SshTunnel } from './lib/tunnel.js'
 import { proxyRealtimeUpgrade } from './lib/ws-proxy.js'
 import { appendReport, diag, diagPaths, tailLog, writeReport } from './lib/diag.js'
 
 export const name = 'voice-ayuan'
-export const inject = ['webServer']
+// agents：把语音任务投递进用户当前正在聊的 live DSH 会话（dsh-base 的 agent/agent-loop）。
+export const inject = ['webServer', 'agents']
 
 function requestSummary(req) {
   const h = req.headers || {}
@@ -65,6 +68,20 @@ export function apply(ctx, config = {}) {
     return [...new Set(origins)].join(',')
   }
 
+  // 语音任务 → 当前 DSH 会话的宿主桥。默认启用；config.bridge.enabled=false 可关。
+  const bridgeConfig = config.bridge ?? {}
+  const bridgeEnabled = bridgeConfig.enabled !== false
+  let bridge = null
+  if (bridgeEnabled) {
+    bridge = createVoiceBridge({
+      ctx,
+      webServer: ctx.webServer,
+      config: bridgeConfig,
+      log,
+    })
+    ctx.effect(() => () => bridge.close(), 'voice-ayuan: dsh session bridge')
+  }
+
   const tunnel = new SshTunnel({
     host: remote.host,
     port: remote.port,
@@ -77,6 +94,27 @@ export function apply(ctx, config = {}) {
     tunnelUrl: `ws://127.0.0.1:${remote.tunnelLocalPort}/v1/realtime`,
     allowedOrigin,
     log,
+    ...(bridge
+      ? {
+          // 网关子进程入口换成 bridge/gateway-host.mjs：BackendPort 指向「阿源当前会话」。
+          entry: new URL('./bridge/gateway-host.mjs', import.meta.url),
+          bridgeUrl: () => bridge.url(),
+          bridgeToken: bridge.token,
+          // 仅启用 bridge 时生效：前台提示词、工具面、后端选择。
+          extraEnv: () => ({
+            AGENT_PROTOCOL: '',
+            QWEN_AUDIO_AGENT_BACKEND: 'none',
+            QWEN_AUDIO_AGENT_FRONTEND_PROMPT_DIR: fileURLToPath(new URL('./prompt', import.meta.url)),
+            QWEN_AUDIO_AGENT_ASSISTANT_PROFILE_PATH: fileURLToPath(new URL('./prompt/ASSISTANT.md', import.meta.url)),
+            // 快模型只保留「转交给阿源」相关工具。
+            QWEN_AUDIO_SCHEDULE_TOOL_ENABLED: '0',
+            QWEN_AUDIO_WEB_TOOLS_ENABLED: '0',
+            QWEN_AUDIO_KNOWLEDGE_TOOL_ENABLED: '0',
+            QWEN_AUDIO_NOTES_TOOL_ENABLED: '0',
+            QWEN_AUDIO_RECALL_TOOL_ENABLED: '0',
+          }),
+        }
+      : {}),
   })
 
   const boot = (async () => {
@@ -153,6 +191,7 @@ export function apply(ctx, config = {}) {
           phase: (status && status.phase) || 'starting',
           error: '语音网关启动中，请稍后重试',
           tunnel: tunnel.status(),
+          bridge: bridge ? bridge.status() : null,
           ready: Boolean(gateway.origin),
         })
         return
@@ -160,8 +199,9 @@ export function apply(ctx, config = {}) {
       json(res, {
         ...status,
         allowedOrigin: allowedOrigin(),
-        ready: Boolean(gateway.origin),
         tunnel: tunnel.status(),
+        bridge: bridge ? bridge.status() : null,
+        ready: Boolean(gateway.origin),
         boot: Boolean(status.ok),
       })
     },
@@ -213,7 +253,7 @@ export function apply(ctx, config = {}) {
 
   try {
     ctx.provide('voiceCall', {
-      status: () => ({ gateway: gateway.status(), tunnel: tunnel.status() }),
+      status: () => ({ gateway: gateway.status(), tunnel: tunnel.status(), bridge: bridge?.status?.() ?? null }),
       health: () => gateway.health(),
       start: async () => { await tunnel.start(); return gateway.start() },
       stop: async () => { await gateway.stop(); tunnel.stop() },
@@ -223,3 +263,5 @@ export function apply(ctx, config = {}) {
     log('provide(voiceCall) failed:', String(error).slice(0, 200))
   }
 }
+
+// hmr probe 1793288482558

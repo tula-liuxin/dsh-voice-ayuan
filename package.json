@@ -1,9 +1,9 @@
 {
   "name": "@local/voice-ayuan",
-  "version": "0.1.6",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "阿源语音通话：在 DSH 输入区点一个图标，和本地 speech-to-speech 实时对话，并把活派给阿源。",
+  "description": "阿源语音通话：豆包式实时语音（DeepSeek V4.1 Flash 前台 + speech-to-speech 本地管线），任务真正接入当前 DSH 会话执行。",
   "exports": {
     ".": "./index.js",
     "./client": "./client.js",

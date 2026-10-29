@@ -1,7 +1,7 @@
 # voice-ayuan 上游实时语音 RUNBOOK
 
-> 覆盖链路：**DSH GUI → 插件 ayuan 电话按钮 → 本机网关(qwen-audio-agent) → ssh 隧道 18765 → 服务器 speech-to-speech 8765 → GPU1**
-> 最后验证：2026-10-29 晚（真实中文 PCM 进、24k 语音+双向 transcript 出、function calling、打断均通过）
+> 覆盖链路：**DSH GUI → 插件 ayuan 电话按钮 → 本机网关(qwen-audio-agent) → ssh 隧道 18765 → 服务器 speech-to-speech 8765 → STT/TTS 在 GPU1，LLM = DeepSeek V4.1 Flash（远端 responses-api）**
+> 最后验证：2026-10-29 晚（真实中文 PCM 进、24k 语音+双向 transcript 出、function calling、打断、DeepSeek 切换后延迟对比均通过）
 > 部署机：本地 Windows（DSH 桌面应用）+ 服务器 qiu_team@58.246.75.58:44022
 
 ---
@@ -36,14 +36,20 @@ DSH GUI (Electron 内窗口, http://127.0.0.1:4273)
              env: QWEN_AUDIO_REALTIME_PROVIDER=speech-to-speech
                   SPEECH_TO_SPEECH_REALTIME_URL=ws://127.0.0.1:18765/v1/realtime   ← 必须这一条
              /api/realtime  ← 浏览器经插件 /voice-ayuan/rt 反代
-  └─ ws 18765 ──ssh──► 服务器 127.0.0.1:8765/v1/realtime (speech-to-speech, num_pipelines=2, GPU1)
+  └─ ws 18765 ──ssh──► 服务器 127.0.0.1:8765/v1/realtime (speech-to-speech, num_pipelines=2)
+        ├─ VAD + STT (paraformer) + TTS (qwen3) → GPU1
+        └─ LLM → https://api.deepseek.com/v1/responses (deepseek-flash, reasoning.effort=none, 流式)
 ```
+
+> 2026-10-29 起实时层 LLM 已从本地 Qwen3-4B 换成 **DeepSeek V4.1 Flash**（responses-api，关思考）；
+> 切换/回滚见 §8。STT/TTS/2 pipeline 不变，GPU1 占用从 ~29.8GB 降到 ~13.3GB。
 
 | 位置 | 路径 |
 |---|---|
 | 本地插件仓库 | `C:\Users\23677\Desktop\dsh-plugins\voice-ayuan` |
 | 插件入口/隧道/网关 | `index.js`、`lib/tunnel.js`、`lib/gateway.js`、`lib/ws-proxy.js` |
-| 本 RUNBOOK / 验收脚本 | 仓库 `deploy/RUNBOOK.md`、`deploy/e2e-voice.mjs`、`deploy/probe-upstream.mjs`、`deploy/patch-s2s-mps.py`、`deploy/s2s-voice.service`、`deploy/start.sh` |
+| 本 RUNBOOK / 验收脚本 | 仓库 `deploy/RUNBOOK.md`、`deploy/e2e-voice.mjs`、`deploy/probe-upstream.mjs`、`deploy/patch-s2s-mps.py`、`deploy/patch-s2s-reasoning.py`、`deploy/llm-probe.mjs`、`deploy/llm-handler-probe.py`、`deploy/s2s-voice.service`、`deploy/start.sh` |
+| 上游 LLM 密钥（服务器，**不进 git**） | `~/co-dir/voice-ayuan/env/llm.env`（目录 700 / 文件 600，仅 `DEEPSEEK_API_KEY=...`） |
 | 服务器 systemd 用户单元 | `~/.config/systemd/user/s2s-voice.service`（enabled + linger=yes） |
 | 服务器启动脚本 | `~/co-dir/voice-ayuan/scripts/start.sh`（备份 `.bak-voice`） |
 | 服务器 venv | `~/co-dir/voice-ayuan/venv` |
@@ -59,7 +65,7 @@ DSH GUI (Electron 内窗口, http://127.0.0.1:4273)
 
 ```bash
 # 启停/重启
-systemctl --user restart s2s-voice      # 重启（离线加载，约 50~60s 起来）
+systemctl --user restart s2s-voice      # 重启（LLM 在远端后约 25~30s 起来；换回本地 Qwen 时约 55s）
 systemctl --user stop s2s-voice
 systemctl --user start s2s-voice
 systemctl --user status s2s-voice --no-pager -l
@@ -104,28 +110,31 @@ node deploy/e2e-voice.mjs all          # 1+2+3
 ```
 
 **验生产真实网关**（不 fork 测试网关，直接打插件当前在跑的网关；端口从
-`http://127.0.0.1:4273/voice-ayuan/status` 的 `origin` 里取）：
+`http://127.0.0.1:<当前 GUI 端口>/voice-ayuan/status` 的 `origin` 里取。GUI 端口每次启动可能变
+（见过 4273/4580），网关端口是随机的（见过 14576/2549）：
 
 ```powershell
-$env:E2E_GATEWAY_PORT='14576'          # 换成 /voice-ayuan/status 返回的 origin 端口
+$env:E2E_GATEWAY_PORT='2549'           # 换成 /voice-ayuan/status 返回的 origin 端口
 node deploy/e2e-voice.mjs e2e --skip-gateway
 ```
 
 产物（`deploy/out/`，已在 git 中忽略，随时可由脚本重建）：`e2e-report.json`（指标）、`e2e-events.jsonl`（原始网关事件）、`e2e-output-24k.wav`（收到的语音）、`tool-report.json`、`interrupt-report.json`、`concurrent-report.json`。
 
-一次通过的样子（2026-10-29 实测，生产网关 origin=http://127.0.0.1:14576，隧道 18765，服务 pool size 2）：
+一次通过的样子（2026-10-29 切换 DeepSeek 后实测，生产网关 origin=http://127.0.0.1:2549，隧道 18765，服务 pool size 2）：
 
 ```
 [e2e] transcript.final user: "今天天气不错我们开始测试实时语音通话请把这句话说一遍"
 [e2e] transcript.final assistant: "今天天气不错我们开始测试实时语音通话"
-[e2e] audio.delta ... rate=24000   (23 块累计 182784 B = 3.81s)
+[e2e] audio.delta ... rate=24000   (25 块累计 198144 B = 4.13s)
 [e2e] audio.done
-[e2e] E2E PASS: audio=3.81s
+[e2e] E2E PASS: audio=4.13s
+[e2e] LATENCY(ms) {"pushEndToResponseStarted":258,"responseStartedToFirstAudio":215,"pushEndToFirstAudio":473,...}
 ```
 
-同次验收的其它三条（均 PASS）：`concurrent` 两连接同时在线 `pool.in_use=2`；`tool` 模型调用
+同批验收（均 PASS）：`concurrent` 两连接同时在线 `pool.in_use=2`；`tool` 模型调用
 `test_echo({"text":"你好阿源"})` 并收到 `response.function_call_arguments.done`；`interrupt` 助手说话中用户插话 →
-`input_audio_buffer.speech_started` + `response.done(status=cancelled)`。
+`input_audio_buffer.speech_started` + `response.done(status=cancelled)`。DeepSeek 后两次 e2e 延迟稳定：
+pushEnd→response.started 258/290ms，pushEnd→首个 audio.delta 473/474ms（Qwen3-4B 基线为 965/1146ms）。
 
 ⚠️ 注意：
 - 跑 e2e 会占上游 pipeline（当前 2 个槽）几十秒。真实用户正在通话时**不要跑**；跑之前可 `curl -s http://127.0.0.1:8765/v1/pool` 确认。
@@ -146,7 +155,8 @@ node deploy/e2e-voice.mjs e2e --skip-gateway
 | 用户转写 | 网关 `transcript.final { role:'user', content } `；上游还有 delta 流式版本 |
 | 助手转写 | 网关 `transcript.final { role:'assistant', content }`；**客户端必须先回 `playback.started {responseId}`**，否则网关把转写留在 pending 不 flush（设计）；播完回 `playback.ended` |
 | 打断 | 助手说话时用户开口：上游发 `input_audio_buffer.speech_started` 并取消在飞 response（`response.done` status=`cancelled`；**没有**独立 `response.interrupted` 事件）。网关侧表现为 `playback.clear(reason:'user_interruption')` + `voice.state listening`；前端收到应立刻停本地播放 |
-| function calling | 上游支持 GA 方言 tools；实测模型发 `response.function_call_arguments.done`（name/arguments/call_id）。网关侧 client tools 走 session.hello 的 tools，模型调用会变 `tool.call` 事件 |
+| function calling | 上游支持 GA 方言 tools；实测模型发 `response.function_call_arguments.done`（name/arguments/call_id）。网关侧 client tools 走 session.hello 的 tools，模型调用会变 `tool.call` 事件；DeepSeek 后端同样实测通过（`test_echo`） |
+| LLM 后端 | 当前 **DeepSeek V4.1 Flash（responses-api，关思考，流式）**；语音层只负责快速回应+转交，工具集由 voice-bridge 控制。延迟基准见 §8 |
 | 并发 | `--num_pipelines N` 决定槽数；超了会 `Rejected connection: all N pipeline slots in use`。当前 **N=2**，两路会话可同时在线，`/v1/pool` 可查每槽 idle/active |
 
 ---
@@ -166,6 +176,10 @@ node deploy/e2e-voice.mjs e2e --skip-gateway
 | 9 | 升级/重装后启动报 `upsample` setter / 缺 `standardize_rope` / qwentts-cpp wheel | journal ImportError | 版本不匹配 | 按 §6 版本锁定重装，**不要乱升级** |
 | 10 | assistant transcript 一直为空，但 audio 正常 | 前端事件里没有回 `playback.started` | 设计：转写等回执后 flush | 前端在收到 first `audio.delta` 后回 `playback.started{responseId}`，播完回 `playback.ended` |
 | 11 | 模型文件缺失/下载失败 | journal 404/429/连接错误；`/mnt/data/co-dir/voice-ayuan/hf-cache` 体积异常 | 未预下载或 hf-mirror 限速 | 跑 `scripts/download-models.sh` 预下载；或 ModelScope 下载到 models 目录（见 DEPLOY.md） |
+| 12 | 服务启动即失败：`DEEPSEEK_API_KEY is missing` | start.sh 的 `: "${DEEPSEEK_API_KEY:?...}"` 报错；journal 见启动脚本退出 | `~/co-dir/voice-ayuan/env/llm.env` 缺失/为空/权限不对 | 重写 env 文件（`DEEPSEEK_API_KEY=sk-...`，chmod 600 目录 700）；**不要把密钥写进 start.sh 或 git** |
+| 13 | 每次回复都出固定英文兜底 `"Wow I'm a bit slow today, could you repeat that?"` | journal `OpenAI API read timed out after 20.0s` | 到 api.deepseek.com 网络慢/断/限流，或 responses-api 请求超时（handler 默认 request_timeout_s=20） | 服务器 `curl -s -o /dev/null -w '%{http_code}' https://api.deepseek.com/v1/models -H "Authorization: Bearer $DEEPSEEK_API_KEY"` 验证连通与鉴权；429 时等额度/限流恢复 |
+| 14 | DeepSeek 回复变慢、token 费用变高、首个音频明显变晚 | 用 `deploy/llm-handler-probe.py` 看 `usage.reasoning_tokens` 是否 >0；journal 里 `output_tokens` 异常大 | 关思考没生效（s2s 的 disable_thinking 只发 chat_template_kwargs，DeepSeek 会忽略；或 env 被改） | 确认 `VOICE_AYUAN_LLM_REASONING_EFFORT=none`、补丁在（`python scripts/patch-s2s-reasoning.py --check`），并用探针确认 `reasoning_tokens=0` |
+| 15 | 换了 DeepSeek 后 STT 有、但完全没回复 | journal 有 LLM 401/403/404 | base_url/model 写错，或密钥失效 | 校验 `--model_name deepseek-flash`、`--responses_api_base_url https://api.deepseek.com/v1`；用 `deploy/llm-probe.mjs` 直连确认 200 |
 
 ---
 
@@ -180,9 +194,13 @@ node deploy/e2e-voice.mjs e2e --skip-gateway
 | hf-xet | **不装** | hf-mirror 不代理 Xet CAS，会 401/挂死 |
 | Python | 3.12 | venv 现状 |
 | GPU | **GPU1（CUDA_VISIBLE_DEVICES=1）** | GPU0 常驻别人 vLLM |
+| 实时 LLM | **DeepSeek V4.1 Flash（deepseek-flash）** | 远端 `https://api.deepseek.com/v1` Responses API；关思考 `reasoning.effort=none`；本地不再加载 Qwen3-4B |
+| openai SDK | 随 s2s 0.2.10 解析 | responses-api handler 依赖它；不要单独降级 |
 
-本地补丁：`deploy/patch-s2s-mps.py` 修改 `speech_to_speech/STT/paraformer_handler.py`（带 marker，幂等；`--check` 可只检查）。
-上游 pip 重装/升级会覆盖该文件 → **重装后必须重跑补丁**。
+本地补丁（pip 重装/升级会被覆盖 → **重装后必须重跑**）：
+- `deploy/patch-s2s-mps.py` → `speech_to_speech/STT/paraformer_handler.py`（MPS 空缓存 bug）
+- `deploy/patch-s2s-reasoning.py` → `speech_to_speech/LLM/responses_api_language_model.py`（把 `VOICE_AYUAN_LLM_REASONING_EFFORT` 注入 extra_body.reasoning.effort，DeepSeek 关思考）
+两者都幂等、带 marker、`--check` 可只检查，并自动备份 `.bak-voice*`。
 
 ---
 
@@ -192,10 +210,84 @@ node deploy/e2e-voice.mjs e2e --skip-gateway
 - 2026-10-29：服务改持久化 systemd user unit（enabled + Restart=always + linger）；启动改为 HF 离线加载（`HF_HUB_OFFLINE=1`/`TRANSFORMERS_OFFLINE=1`），启动 36s（1 pipeline）/54s（2 pipelines）。
 - 2026-10-29：`--num_pipelines 2` 实测可用（GPU1 约 28.7GB / 49.1GB，留 ~20GB 余量），并发双会话不再互相饿死。
 - 待办：宿主 DSH 重启把网关切回 `18765` 后，**关掉 Lead 临时起的 8765→服务器 8765 隧道**（避免两套隧道并存；只留插件自己那条 18765）。
+- 2026-10-29 23:40：实时层 LLM 从本地 Qwen3-4B 切换为 **DeepSeek V4.1 Flash**（responses-api + reasoning.effort=none + 流式，2 pipeline 不变）。启动 54s→27s，GPU1 29.8GB→13.3GB；生产网关 e2e 通过，pushEnd→首音频 473/474ms（Qwen 基线 1146ms）。旧配置备份 `scripts/start.sh.bak-qwen3-4b`，回滚见 §8。
 
 ---
 
-## 8. 只读/写域约定（本仓库工作流）
+## 8. LLM 后端：DeepSeek V4.1 Flash（切换 / 验证 / 回滚）
+
+实时层只负责**快速回应 + 把活转交给阿源**，所以 LLM 用远端 DeepSeek Flash（关思考、流式），STT/TTS 仍在本机 GPU1。
+
+### 8.1 当前生效配置（服务器 `scripts/start.sh`）
+
+```bash
+# 密钥：source env/llm.env（内容只有 DEEPSEEK_API_KEY=sk-...，dir 700 / file 600，不进 git）
+--llm_backend responses-api --model_name deepseek-flash \
+--responses_api_base_url https://api.deepseek.com/v1 \
+--responses_api_api_key "$DEEPSEEK_API_KEY" \
+--responses_api_disable_thinking true \
+--responses_api_stream true \
+--stream_batch_sentences 1
+# 其余不变：--stt paraformer、--tts qwen3（Vivian/chinese）、--num_pipelines 2、--device cuda
+```
+
+- 启动时每个 pipeline 会做一次 Responses API warmup（约 0.7~0.9s，会产生少量 token 费用）。
+- 启动时间 ~27s（LLM 不在本地后更快）；GPU1 ~13.3GB（STT+TTS×2）。
+- 单轮请求超时 20s（handler 默认），超时会说固定英文兜底句（见 §5 #13）。
+
+### 8.2 关思考为什么需要补丁
+
+s2s 0.2.10 的 `--responses_api_disable_thinking` 对非 OpenAI 端只发
+`extra_body.chat_template_kwargs.enable_thinking=false`（vLLM/Together 约定）。**DeepSeek 接受但忽略**该字段
+（实测 reasoning_tokens 仍 40~90）。DeepSeek Responses API 的正确写法是
+`reasoning: {"effort": "none"}`（合法值 none/minimal/low/medium/high/xhigh/ultra/max；`off` 会 422）。
+
+→ `deploy/patch-s2s-reasoning.py` 在 handler 里把 `VOICE_AYUAN_LLM_REASONING_EFFORT`（默认 none）合并进
+`extra_body.reasoning.effort`。start.sh 显式导出该 env。
+
+验证关思考生效（三种方式任选）：
+1) 服务器跑 `deploy/llm-handler-probe.py`，看 `usage.reasoning_tokens == 0` 且 `extraBody.reasoning.effort == "none"`；
+2) 本机跑 `node deploy/llm-probe.mjs` 对比 `reasoning.effort=none` vs 不传（后者 items 含 `reasoning`）；
+3) journal 里 `Token usage (response)` 的 output tokens 很小（正常短答 9~40），没有成倍 reasoning 消耗。
+
+### 8.3 切换到其它 LLM（通用步骤）
+
+1. 服务器 `env/llm.env` 加对应 key（600 权限）；
+2. `cp scripts/start.sh scripts/start.sh.bak-<旧后端>`；
+3. 改 `--llm_backend responses-api --model_name <model> --responses_api_base_url <base_url> --responses_api_api_key "$KEY"`；
+4. `systemctl --user restart s2s-voice` → `curl /v1/pool` + journal 看 `ResponsesApiModelHandler: warmed up`；
+5. 跑 §3 的 e2e + tool + interrupt 再收工。
+
+### 8.4 回滚到本地 Qwen3-4B（一键）
+
+```bash
+ssh -p 44022 qiu_team@58.246.75.58 '
+  cd ~/co-dir/voice-ayuan &&
+  cp scripts/start.sh.bak-qwen3-4b scripts/start.sh &&
+  systemctl --user restart s2s-voice'
+# 约 55s 后 8765 就绪；验证：curl -s http://127.0.0.1:8765/v1/pool
+```
+
+### 8.5 延迟/质量基准（2026-10-29 实测，同一链路 生产网关→18765→服务器）
+
+| 指标（e2e 通过生产的插件网关） | Qwen3-4B（本地 transformers） | DeepSeek V4.1 Flash（responses-api，none） |
+|---|---|---|
+| pushEnd → response.started | 965 ms | **258 / 290 ms** |
+| pushEnd → 首个 24k audio.delta | 1146 ms | **473 / 474 ms** |
+| userFinal → response.started | 1584 ms | **884 / 906 ms** |
+| response.started → 首音频（TTS 侧） | 181 ms | 184 / 215 ms |
+| handler 直测 TTFT（中文短答） | — | 360 ms（快速） / 688 ms（真实短问答） |
+| handler 直测 tool call 首个事件→call 完成 | — | 118 ms → 881 ms |
+| 输出语音 | 4.06s | 4.13 / 4.77s |
+| 质量样例（中文） | 「今天天气不错我们开始测试实时语音通话」 | 「你好！谢谢关心，我今天心情挺好的，希望你也一样！」；「好的，不过我现在没法直接查实时天气…」（不编造） |
+| 关思考 | 不适用（无思考） | reasoning_tokens=0（三次调用均 0） |
+
+产物对照：`deploy/out/baseline-qwen3-4b-report.json`、`deploy/out/e2e-deepseek-gateway.log`、`deploy/out/e2e-deepseek-gateway-2.log`、
+`deploy/out/tool-report.json`、`deploy/out/interrupt-report.json`；handler 级报告在服务器 `~/co-dir/voice-ayuan/logs/llm-probe-report.json`。
+
+---
+
+## 9. 只读/写域约定（本仓库工作流）
 
 - 服务器只写镜像目录：`~/co-dir/voice-ayuan`、`/mnt/data/co-dir/voice-ayuan`；systemd 单元属于用户配置（`~/.config/systemd/user/`）。
 - 禁止用 `pkill -f` 盲杀；先 `ps -o pid,etime,cmd` 确认。
