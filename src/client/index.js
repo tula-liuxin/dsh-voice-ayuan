@@ -89,6 +89,7 @@ function VoicePanel({ onClose, React, h, anchor }) {
   const { useEffect, useRef } = React
   const [state, setState] = React.useState('connecting')
   const [mic, setMic] = React.useState('opening')
+  const [diag, setDiag] = React.useState('')
   const [detail, setDetail] = React.useState('')
   const [caption, setCaption] = React.useState('')
   const clientRef = useRef(null)
@@ -148,6 +149,10 @@ function VoicePanel({ onClose, React, h, anchor }) {
     }
 
     const start = async () => {
+      let perm = 'unknown'
+      try { perm = (await navigator.permissions.query({ name: 'microphone' })).state } catch {}
+      const hasMedia = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)
+      setDiag('媒体接口 ' + (hasMedia ? '可用' : '缺失') + ' · 麦克风权限 ' + perm + ' · 安全上下文 ' + (window.isSecureContext ? '是' : '否'))
       const res = await fetch('/voice-ayuan/status', { cache: 'no-store' })
       const text = await res.text()
       let status = {}
@@ -185,7 +190,7 @@ function VoicePanel({ onClose, React, h, anchor }) {
         if (!disposed) { setMic('on'); setState('live') }
       } catch (error) {
         if (!disposed) { setMic('error'); setState('error') }
-        setDetail('麦克风不可用：' + String(error).slice(0, 160))
+        setDetail('麦克风不可用：' + (error && error.name ? error.name + ' ' : '') + String(error && error.message ? error.message : error).slice(0, 140))
       }
     }
 
@@ -237,6 +242,7 @@ function VoicePanel({ onClose, React, h, anchor }) {
     caption ? h('div', { style: { opacity: 0.9, marginBottom: 6, minHeight: 18 } }, caption) : null,
     detail ? h('div', { style: { color: '#f85149', fontSize: 12, marginBottom: 6 } }, detail) : null,
     h('div', { style: { opacity: 0.65, fontSize: 12 } }, '说话即可，随时打断；Esc 关闭。'),
+    diag ? h('div', { style: { opacity: 0.45, fontSize: 11, marginTop: 6, wordBreak: 'break-all' } }, diag) : null,
   )
 }
 
@@ -282,10 +288,29 @@ window.__ModuleLoader__.load({
       const [offset, setOffset] = React.useState({ dx: 0, dy: 0 })
       const moved = React.useRef(false)
 
-      const baseLeft = rect ? rect.x : innerWidth - size - 24
-      const baseTop = rect ? rect.y - size - 8 : innerHeight - size - 96
-      const left = Math.min(Math.max(4, baseLeft + offset.dx), innerWidth - size - 4)
-      const top = Math.min(Math.max(4, baseTop + offset.dy), innerHeight - size - 4)
+      const btnRef = React.useRef(null)
+      const spot = React.useMemo(() => {
+        if (!rect) return { left: innerWidth - size - 24, top: innerHeight - size - 96 }
+        const candidates = [
+          { dx: -96, dy: 0 }, { dx: -144, dy: 0 }, { dx: -48, dy: 0 }, { dx: 0, dy: -56 },
+        ]
+        const free = (left, top) => {
+          if (left < 4 || top < 4) return false
+          if (typeof document.elementFromPoint !== 'function') return true
+          const el = document.elementFromPoint(left + size / 2, top + size / 2)
+          if (!el || el === document.body || el === document.documentElement) return true
+          if (btnRef.current && (el === btnRef.current || btnRef.current.contains(el))) return true
+          return false
+        }
+        for (const c of candidates) {
+          const left = rect.x + c.dx
+          const top = rect.y + c.dy
+          if (free(left, top)) return { left, top }
+        }
+        return { left: rect.x, top: Math.max(4, rect.y - size - 8) }
+      }, [rect && rect.x, rect && rect.y])
+      const left = Math.min(Math.max(4, spot.left + offset.dx), innerWidth - size - 4)
+      const top = Math.min(Math.max(4, spot.top + offset.dy), innerHeight - size - 4)
 
       const onPointerDown = (event) => {
         if (event.button !== 0) return
@@ -335,6 +360,7 @@ window.__ModuleLoader__.load({
 
       return h(React.Fragment, null,
         h('button', {
+          ref: btnRef,
           type: 'button', title: '阿源语音通话（可拖动）', 'aria-label': '阿源语音通话',
           onPointerDown, onPointerMove, onPointerUp, onClick,
           style: {

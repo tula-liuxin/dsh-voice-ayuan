@@ -15,7 +15,16 @@ export function apply(ctx, config = {}) {
     remotePort: 8765,
     ...(config.remote ?? {}),
   }
-  const allowedOrigin = config.gateway?.allowedOrigin ?? 'http://127.0.0.1:7969'
+  const configuredOrigin = config.gateway?.allowedOrigin ?? ''
+  const allowedOrigin = () => {
+    const origins = []
+    try {
+      const live = ctx.webServer.getOrigin()
+      if (live) origins.push(live)
+    } catch {}
+    if (configuredOrigin) origins.push(configuredOrigin)
+    return [...new Set(origins)].join(',')
+  }
 
   const tunnel = new SshTunnel({
     host: remote.host,
