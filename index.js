@@ -5,20 +5,29 @@ import { proxyRealtimeUpgrade } from './lib/ws-proxy.js'
 export const name = 'voice-ayuan'
 export const inject = ['webServer']
 
-export function apply(ctx, config) {
+export function apply(ctx, config = {}) {
   const log = (...args) => ctx.logger?.info?.('[voice-ayuan]', ...args)
-  const remote = config.remote ?? {}
+  const remote = {
+    host: '127.0.0.1',
+    port: 22,
+    user: 'your-user',
+    tunnelLocalPort: 18765,
+    remotePort: 8765,
+    ...(config.remote ?? {}),
+  }
+  const allowedOrigin = config.gateway?.allowedOrigin ?? 'http://127.0.0.1:7969'
+
   const tunnel = new SshTunnel({
     host: remote.host,
-    port: remote.port ?? 22,
+    port: remote.port,
     user: remote.user,
-    localPort: remote.tunnelLocalPort ?? 18765,
-    remotePort: remote.remotePort ?? 8765,
+    localPort: remote.tunnelLocalPort,
+    remotePort: remote.remotePort,
     log,
   })
   const gateway = new GatewayProcess({
-    tunnelUrl: `ws://127.0.0.1:${remote.tunnelLocalPort ?? 18765}/v1/realtime`,
-    allowedOrigin: config.gateway?.allowedOrigin ?? 'http://127.0.0.1:7969',
+    tunnelUrl: `ws://127.0.0.1:${remote.tunnelLocalPort}/v1/realtime`,
+    allowedOrigin,
     log,
   })
 
@@ -49,34 +58,21 @@ export function apply(ctx, config) {
     kind: 'exact',
     path: '/voice-ayuan/status',
     handler: async (req, res) => {
-      await boot
       const status = await gateway.health()
       res.setHeader('content-type', 'application/json; charset=utf-8')
       res.setHeader('cache-control', 'no-store')
-      res.end(JSON.stringify({ ...status, tunnel: tunnel.status() }))
+      res.end(JSON.stringify({ ...status, tunnel: tunnel.status(), boot: Boolean(status.ok) }))
     },
   }), 'voice-ayuan: status route')
 
-  ctx.provide('voice', {
-    status: () => ({ gateway: gateway.status(), tunnel: tunnel.status() }),
-    health: () => gateway.health(),
-    start: async () => { await tunnel.start(); return gateway.start() },
-    stop: async () => { await gateway.stop(); tunnel.stop() },
-  })
-}
-
-export const Config = {
-  remote: {
-    host: '58.246.75.58',
-    port: 44022,
-    user: 'qiu_team',
-    unit: 'speech-to-speech.service',
-    gpuPolicy: 'idle',
-    tunnelLocalPort: 18765,
-    remotePort: 8765,
-  },
-  gateway: { allowedOrigin: 'http://127.0.0.1:7969' },
-  time: 'basic',
-  record: 'off',
-  permission: 'task',
+  try {
+    ctx.provide('voiceCall', {
+      status: () => ({ gateway: gateway.status(), tunnel: tunnel.status() }),
+      health: () => gateway.health(),
+      start: async () => { await tunnel.start(); return gateway.start() },
+      stop: async () => { await gateway.stop(); tunnel.stop() },
+    })
+  } catch (error) {
+    log('provide(voiceCall) failed:', String(error).slice(0, 200))
+  }
 }

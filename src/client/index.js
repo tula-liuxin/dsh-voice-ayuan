@@ -63,10 +63,12 @@ function VoicePanel({ onClose, React, h }) {
 
     async function start() {
       const res = await fetch('/voice-ayuan/status', { cache: 'no-store' })
-      const status = await res.json()
-      if (!status.ok || !status.origin) {
+      const text = await res.text()
+      let status = {}
+      try { status = text ? JSON.parse(text) : {} } catch { status = {} }
+      if (!res.ok || !status.ok || !status.origin) {
         setState('error')
-        setDetail(status.error || 'Gateway 未就绪，请先启动语音服务')
+        setDetail(status.error || (res.ok ? 'Gateway 未就绪，请先启动语音服务' : '宿主插件未加载（重启 DSH 后再试）'))
         return
       }
       const wsUrl = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/voice-ayuan/rt'
@@ -141,7 +143,7 @@ function VoicePanel({ onClose, React, h }) {
   const dot = state === 'live' ? '#2ea043' : state === 'error' ? '#d1242f' : '#bf8700'
   return h('div', {
     style: {
-      position: 'fixed', right: 24, bottom: 96, width: 320, zIndex: 9999,
+      position: 'fixed', right: 20, bottom: 232, width: 320, zIndex: 9999,
       background: 'var(--dsw-alias-bg-elevated, #1f2328)', color: 'inherit',
       border: '1px solid var(--dsw-alias-border, #30363d)', borderRadius: 14,
       boxShadow: '0 12px 32px rgba(0,0,0,.35)', padding: 16, fontSize: 13,
@@ -167,6 +169,72 @@ window.__ModuleLoader__.load({
     const React = require('react')
     const h = React.createElement
 
+
+
+    // 跟随阿源的浮动气泡：读它存在 localStorage 的位置，投影到视口后贴在其上方。
+    // 读不到（未装阿源）时退回右下角默认位置。
+    const BUBBLE_KEY = 'ayuan.bubble-position.v2'
+    function bubbleAnchor() {
+      try {
+        const raw = localStorage.getItem(BUBBLE_KEY)
+        if (!raw) return null
+        const p = JSON.parse(raw)
+        if (!Number.isFinite(p?.rx) || !Number.isFinite(p?.ry)) return null
+        const clamp = (n) => Math.max(0, Math.min(1, Number(n) || 0))
+        const size = window.matchMedia?.('(pointer:coarse)').matches ? 44 : 42
+        const y = Math.max(40, Math.min(innerHeight - size - 8, 40 + clamp(p.ry) * Math.max(1, innerHeight - size - 48)))
+        const dock = ['left', 'right'].includes(p.dock) ? p.dock : null
+        const x = dock === 'left' ? -size / 2
+          : dock === 'right' ? innerWidth - size / 2
+          : 8 + clamp(p.rx) * Math.max(0, innerWidth - size - 16)
+        return { x, y, size, dock }
+      } catch { return null }
+    }
+
+    function useAyuanAnchor() {
+      const [rect, setRect] = React.useState(() => bubbleAnchor())
+      React.useEffect(() => {
+        const update = () => setRect(bubbleAnchor())
+        update()
+        const timer = setInterval(update, 250)
+        window.addEventListener('resize', update)
+        return () => { clearInterval(timer); window.removeEventListener('resize', update) }
+      }, [])
+      return rect
+    }
+
+    function VoiceLauncher() {
+      const [open, setOpen] = React.useState(false)
+      const anchor = useAyuanAnchor()
+      const size = 40
+      let left = innerWidth - size - 24
+      let top = innerHeight - size - 100
+      if (anchor) {
+        if (anchor.dock === 'right') { left = innerWidth - anchor.size * 2 - 12; top = anchor.y }
+        else if (anchor.dock === 'left') { left = anchor.size + 12; top = anchor.y }
+        else { left = Math.min(Math.max(4, anchor.x), innerWidth - size - 4); top = anchor.y - anchor.size - 8 }
+      }
+      return h(React.Fragment, null,
+        h('button', {
+          type: 'button', title: '阿源语音通话', 'aria-label': '阿源语音通话',
+          onClick: () => setOpen((v) => !v),
+          style: {
+            position: 'fixed', left, top, width: size, height: size,
+            borderRadius: size / 2, border: '1px solid var(--dsw-alias-border, #3a3f45)',
+            background: open ? 'var(--dsw-alias-bg-brand, #247bbf)' : 'var(--dsw-alias-bg-elevated, #1f2328)',
+            color: open ? '#fff' : 'inherit', cursor: 'pointer',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            boxShadow: '0 4px 14px rgba(0,0,0,.35)', zIndex: 998
+          },
+        }, h('svg', { width: 18, height: 18, viewBox: '0 0 24 24', fill: 'none', 'aria-hidden': true },
+          h('path', {
+            d: 'M4 5.5C4 4.7 4.7 4 5.5 4h2.2c.7 0 1.3.5 1.5 1.2l.7 2.6c.1.6-.1 1.2-.6 1.5l-1.3.8a12 12 0 0 0 5.6 5.6l.8-1.3c.3-.5.9-.7 1.5-.6l2.6.7c.7.2 1.2.8 1.2 1.5v2.2c0 .8-.7 1.5-1.5 1.5C10.6 19.7 4.3 13.4 4 5.5Z',
+            stroke: 'currentColor', strokeWidth: 1.6, strokeLinejoin: 'round',
+          }))),
+        open ? h(VoicePanel, { onClose: () => setOpen(false), React, h }) : null,
+      )
+    }
+
     function VoiceButton() {
       const [open, setOpen] = React.useState(false)
       return h(React.Fragment, null,
@@ -191,9 +259,9 @@ window.__ModuleLoader__.load({
     return {
       inject: ['slots'],
       apply(ctx) {
-        ctx.slots.inject('conversation.composer.dock', () => ctx.slots.register({
-          name: 'conversation.composer.dock', id: 'voice-ayuan-call', order: 40,
-        }, VoiceButton))
+        ctx.slots.inject('shell.overlay', () => ctx.slots.register({
+          name: 'shell.overlay', id: 'voice-ayuan-launcher', order: 60,
+        }, VoiceLauncher))
       },
     }
   },
