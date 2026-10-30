@@ -1,6 +1,6 @@
 {
   "name": "voice-ayuan",
-  "version": "0.2.11",
+  "version": "0.2.12",
   "private": true,
   "type": "module",
   "description": "阿源语音通话：豆包式实时语音（DeepSeek V4.1 Flash 前台 + speech-to-speech 本地管线），任务真正接入当前 DSH 会话执行。",
@@ -36,7 +36,8 @@
   },
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node --test test/*.test.mjs",
+    "verify": "npm run test"
   },
   "keywords": [],
   "author": "",
