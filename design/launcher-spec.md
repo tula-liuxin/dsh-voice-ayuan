@@ -238,3 +238,8 @@ launcher 只消费回调，不碰 Socket/AudioContext：
 - 采集 worklet 攒批 2048 样本（≈43ms）再 post，消息量 ≈375/s → ≈23/s；打断检测粒度相应变成 43ms 级（阈值仍是 80ms）。
 - 新增 `kind=drag-perf` 客户端上报（moves/frames/avgFrameMs/maxFrameMs/slowFrames，带 buildTag），落在 `~/.dsh/voice-ayuan-report.jsonl`，用于以后复核实机拖动帧率。
 **测试**：`test/perf-regression.test.mjs`（锚点去重语义 + worklet 攒批不被改回逐量子 post）。
+### 10.5 指标误报修复（2026-10-30，0.2.11）
+**现象**：面板诊断偶尔闪 `与闪电间隙 7.2px ≠ 8.0px · FAIL`，而槽位偏差/尺寸差都是 0。
+**根因**：电话与闪电是**两个插件各自的 DOM 盒子**，dpr 1.25 时一个设备像素 = 0.8 CSS px，paint 吸附方向可能不同；跨盒子量出来的 gap 会出现 7.2 / 8.8 这类 1 物理像素内的噪声。原不变量容差写死 0.5px（小于一个物理像素），于是把上屏取整噪声判成 FAIL；这是测量口径问题，不是按钮真的错位。
+**修复**：`gapTolerance(dpr) = max(0.5, 1/dpr + 0.25)` 只用于两个**跨盒子**量（`stackGap`、`lightningStep`）；`expectedSlot` 等仍保持 0.5px。PASS 但数值非精确设计值时指标行标注「（亚像素取整）」。面板刚打开 1.2s 内不展示 FAIL（落位过渡帧），持续失败仍走 streak 上报。
+**测试**：`computeMetrics` 虚拟几何（闪电偏 0.8px@dpr1.25 → PASS 且带标注；偏 2px → 仍 FAIL）。

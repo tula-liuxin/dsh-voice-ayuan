@@ -9,7 +9,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
   anchorFromNeighbors, anchorRect, computeMetrics, computePhoneSpot, createLauncher,
-  detachDistance, expectedLightningRect, formatMetricsLine, intersectArea,
+  detachDistance, expectedLightningRect, formatMetricsLine, gapTolerance, intersectArea,
   placePanel, readAnchorFromEvent, readNeighbors, reduceTranscript, settleSpot,
   sameRowState, TRANSCRIPT_LIMIT,
 } from '../src/client/launcher.js'
@@ -266,6 +266,44 @@ test('computeMetrics：dock top 半出屏横排 —— 与鲸鱼同 y，不变�
   assert.equal(metrics.invariants.lightningStep, true)
   assert.equal(metrics.pass, true, formatMetricsLine(metrics))
   assert.match(formatMetricsLine(metrics), /贴边横排/)
+})
+
+test('computeMetrics：1 个物理像素的兄弟按钮取整噪声不再误报 FAIL（实机 7.2px 案例）', () => {
+  // dpr 1.25 时一个物理像素 = 0.8 CSS px：闪电和电话是两个插件各自的 DOM 盒子，paint 吸附方向可能不同。
+  assert.equal(gapTolerance(1), 1.25)
+  assert.equal(gapTolerance(1.25), 1.05)
+  assert.equal(gapTolerance(2), 0.75)
+  assert.equal(gapTolerance(0), 1.25)
+  assert.equal(gapTolerance(NaN), 1.25)
+
+  const anchor = anchorOf(800, 500)
+  const spot = computePhoneSpot({ anchor, view: VIEW })
+  const expected = expectedLightningRect({ anchor, view: VIEW })
+  const args = {
+    view: VIEW,
+    phone: rect(spot.left, spot.top),
+    phoneStyle: STYLE,
+    ball: rect(expected.left + 0.8, expected.top),
+    ballStyle: STYLE,
+    bubble: rect(anchor.x, anchor.y),
+    bubbleStyle: STYLE,
+    bubbleVisible: true,
+    anchor,
+    anchorSource: 'event',
+  }
+  const snapped = computeMetrics({ ...args, dpr: 1.25 })
+  assert.equal(snapped.mode, 'row')
+  assert.equal(snapped.stackGap, 8.8)
+  assert.equal(snapped.gapTolerance, 1.05)
+  assert.equal(snapped.invariants.stackGap, true)
+  assert.equal(snapped.invariants.expectedSlot, true)
+  assert.equal(snapped.pass, true, formatMetricsLine(snapped))
+  assert.match(formatMetricsLine(snapped), /亚像素取整/)
+
+  // 闪电压根没落位（2px 偏移）仍然要 FAIL，容差不能把真问题吃掉。
+  const misaligned = computeMetrics({ ...args, ball: rect(expected.left + 2, expected.top), dpr: 1.25 })
+  assert.equal(misaligned.invariants.stackGap, false)
+  assert.equal(misaligned.pass, false)
 })
 
 test('computeMetrics：实机兜底态会被检出（anchorNearby=false、指标行含「掉队」）', () => {
