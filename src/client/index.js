@@ -2,7 +2,7 @@
 import { createLauncher } from './launcher.js'
 
 window.__ModuleLoader__.load({
-  id: '@local/voice-ayuan',
+  id: 'voice-ayuan',
   factory(require) {
     const React = require('react')
     const h = React.createElement

@@ -30,7 +30,7 @@ node C:\Users\23677\Desktop\dsh-plugins\voice-ayuan\deploy\probe-upstream.mjs ws
 
 ```
 DSH GUI (Electron 内窗口, http://127.0.0.1:4273)
-  └─ 插件 @local/voice-ayuan
+  └─ 插件 voice-ayuan
        ├─ SshTunnel        ssh -N -L 18765:127.0.0.1:8765 qiu_team@58.246.75.58
        └─ GatewayProcess   fork node_modules/qwen-audio-agent .../bootstrap.mjs
              env: QWEN_AUDIO_REALTIME_PROVIDER=speech-to-speech

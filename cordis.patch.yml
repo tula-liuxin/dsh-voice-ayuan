@@ -3,7 +3,7 @@
 # 不要写进这个公开包。
 - insert:
     - id: voice-ayuan
-      name: '@local/voice-ayuan'
+      name: 'voice-ayuan'
       config:
         remote:
           host: 127.0.0.1        # 用 SSH 隧道时填远端主机
