@@ -675,3 +675,28 @@ test('自动新建失败 → 409 SESSION_CREATE_FAILED，不落回主会话', as
     fs.rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test('新建后 agent 晚一步发布 → 按 id 再解析一次，仍然投得进去', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'voice-bridge-host-'))
+  const main = createFakeAgent('session-main', { cwd: 'C:\\Users\\23677\\Downloads' })
+  const agents = [main]
+  const controller = createFakeSessionController({ agents })
+  const late = createFakeAgent('session-late', { cwd: WORKSPACE })
+  controller.persisted.set('session-late', late)
+  // create 只返回 id，agent 稍后才在 resolveAgent 里变成 live（模拟宿主发布次序）
+  controller.createImpl = async () => ({ sessionId: 'session-late' })
+  const host = await startBridgeHost({ agents, tokenFile: path.join(dir, 'bridge.json'), ...workspaceHostOptions({ dir, controller }) })
+  try {
+    const task = await requestJson(host.bridge, 'POST', '/tasks', {
+      taskId: 'gw-late', ownerId: 'owner', instruction: '开始吧',
+    })
+    assert.equal(task.status, 202)
+    assert.equal(task.payload.target.sessionId, 'session-late')
+    assert.equal(late.followups.length, 1)
+    assert.deepEqual(controller.resumed, ['session-late'])
+  } finally {
+    host.bridge.close()
+    await closeServer(host.server)
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
