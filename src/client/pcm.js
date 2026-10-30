@@ -43,11 +43,33 @@ export function downmixTo16k(samples, inputRate) {
   return out
 }
 
+// 采集批量：worklet 攒满 2048 样本（48k ≈ 43ms）再 post 一次。
+// 原来每 128 样本 post 一次 ≈ 375 条消息/秒，主线程光收消息+结构化克隆就要吃掉可观 CPU
+// （通话面板开着时拖动按钮卡顿的来源之一）；攒批后降到 ≈ 23 条/秒。
+export const MIC_BATCH_SAMPLES = 2048
+
 export const WORKLET = `
 class CaptureProcessor extends AudioWorkletProcessor {
+  constructor() {
+    super()
+    this._buf = new Float32Array(${MIC_BATCH_SAMPLES})
+    this._len = 0
+  }
   process(inputs) {
     const channel = inputs[0] && inputs[0][0]
-    if (channel) this.port.postMessage(channel.slice(0))
+    if (channel) {
+      let offset = 0
+      while (offset < channel.length) {
+        const n = Math.min(this._buf.length - this._len, channel.length - offset)
+        this._buf.set(channel.subarray(offset, offset + n), this._len)
+        this._len += n
+        offset += n
+        if (this._len === this._buf.length) {
+          this.port.postMessage(this._buf.slice(0))
+          this._len = 0
+        }
+      }
+    }
     return true
   }
 }

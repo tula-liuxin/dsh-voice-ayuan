@@ -225,3 +225,16 @@ launcher 只消费回调，不碰 Socket/AudioContext：
 - 关麦语义（`session.setMuted`）：不再上行真实人声，但会话继续按原节奏发送等长**零样本**（服务端 VAD 听不到人声，连接与播放不断）；同时 `MediaStreamTrack.enabled=false` 并关闭本端打断检测（静音期间阿源说话不会被回声打断）。开麦立即恢复。
 - 标题同步：静音时 `data-state=muted` 且标题「麦克风已静音」；连接失败仍优先显示错误 + 重试。
 - 测试：`test/mic-mute.test.mjs`（引擎零样本/轨道/打断 + 标题派生 + 会话接口）。
+
+### 10.4 拖动卡顿与降载（2026-10-30，0.2.10）
+**现象**：通话面板打开时，拖动这一排三个悬浮按钮有可感知卡顿。
+**根因（代码路径）**：
+- `VoiceLauncher` 每次渲染都 `readNeighbors()`（`querySelector` + `getBoundingClientRect`）；拖动时阿源按 pointermove 频率广播 `ayuan:launcher-anchor-v1`，我们每条事件都 setState → 渲染 → 读布局，形成「写样式 → 强制布局 → 重渲染」循环，且面板整棵子树跟着同一帧重渲染。
+- 面板打开时叠加：`placeRef` 每 120ms 读一次布局（scrollHeight + 邻居 rect + avoided rect + computedStyle）；320ms 指标测量再量一遍；采集 worklet 每 128 样本 postMessage 一次 ≈ 375 条消息/秒，全在主线程收。
+**修复**：
+- 渲染期零 DOM 读取（邻居位置交给 `useRow` 的 ~12Hz 轮询；锚点事件 rAF 合并 + 相同值去重，锚点 x/y 以事件为准）。
+- 面板重排用纯状态「输入签名」门控：空闲时布局读取 ~8/s → ~1.7/s；整排拖动期间 place 循环、`useRow` 轮询、320ms 指标测量全部让路，松手后 `refreshRow()` 补一帧。
+- 拖动期间面板按 `React.memo` 跳过纯几何 props 引起的重渲染（字幕/状态仍由面板自身 state 驱动）。
+- 采集 worklet 攒批 2048 样本（≈43ms）再 post，消息量 ≈375/s → ≈23/s；打断检测粒度相应变成 43ms 级（阈值仍是 80ms）。
+- 新增 `kind=drag-perf` 客户端上报（moves/frames/avgFrameMs/maxFrameMs/slowFrames，带 buildTag），落在 `~/.dsh/voice-ayuan-report.jsonl`，用于以后复核实机拖动帧率。
+**测试**：`test/perf-regression.test.mjs`（锚点去重语义 + worklet 攒批不被改回逐量子 post）。

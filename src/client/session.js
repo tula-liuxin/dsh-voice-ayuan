@@ -10,7 +10,7 @@
 //   origin 并注入 host cookie —— 这是 DSH 官方支持的 WS 通道。
 // - 普通浏览器 web 模式没有 __DSH_TRANSPORT__，此时页面 origin 就是宿主 origin。
 import { GatewayClient } from 'qwen-audio-agent/gateway-client-sdk'
-import { b64encode, b64decodeToFloat32, downmixTo16k, WORKLET } from './pcm.js'
+import { b64encode, b64decodeToFloat32, downmixTo16k, WORKLET, MIC_BATCH_SAMPLES } from './pcm.js'
 
 export const STATUS_PATH = '/voice-ayuan/status'
 export const REALTIME_PATH = '/voice-ayuan/rt'
@@ -19,7 +19,6 @@ export const DEFAULT_RETRY_DELAYS = [300, 900, 2000]
 export const DEFAULT_INPUT_RATE = 16000
 export const DEFAULT_OUTPUT_RATE = 24000
 
-const MIC_BATCH_SAMPLES = 2048 // ~43ms @48k：批量发送，避免每 128 样本一条 WS 消息
 const BARGE_IN_RMS = 0.02
 const BARGE_IN_HOLD_MS = 80
 const BARGE_IN_COOLDOWN_MS = 600

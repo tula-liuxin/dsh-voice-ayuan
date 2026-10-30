@@ -28,6 +28,9 @@ const REPORT_URL = '/voice-ayuan/report'
 const BUBBLE_KEY = 'ayuan.bubble-position.v2'
 // 拖动期间冻结面板重排：手指按住时的几何抖动不应触发每帧重新选位（手机端闪烁/难点按的另一来源）。
 let launcherDragging = false
+// 整排拖动（leo-quick 协议，任意一个按钮发起）：拖动期间降载（指标测量让路）+ 帧率取证。
+let rowDragging = false
+let rowDragTimer = null
 // 面板重排的最小间隔（ms）。按帧重排会在手机低帧率下变成持续闪动。
 const PLACE_MIN_INTERVAL_MS = 120
 const PHONE_PATH = 'M4 5.5C4 4.7 4.7 4 5.5 4h2.2c.7 0 1.3.5 1.5 1.2l.7 2.6c.1.6-.1 1.2-.6 1.5l-1.3.8a12 12 0 0 0 5.6 5.6l.8-1.3c.3-.5.9-.7 1.5-.6l2.6.7c.7.2 1.2.8 1.2 1.5v2.2c0 .8-.7 1.5-1.5 1.5C10.6 19.7 4.3 13.4 4 5.5Z'
@@ -214,6 +217,17 @@ export function readAnchorFromEvent(detail) {
   if (x == null || y == null || width == null || height == null || width <= 0 || height <= 0) return null
   const dock = ['left', 'right', 'top', 'bottom'].includes(detail.dock) ? detail.dock : null
   return { visible: true, x, y, width, height, dock, expanded: detail.expanded === true, panelOpen: detail.panelOpen === true }
+}
+
+/**
+ * 两帧锚点是否等价（纯函数）：拖动时阿源会按 pointermove 频率广播锚点事件，
+ * 值没变就不必触发 React 重渲染（一次渲染会连带整个通话面板）。
+ */
+export function sameAnchorSnapshot(a, b) {
+  if (a === b) return true
+  if (!a || !b) return false
+  return a.visible === b.visible && a.x === b.x && a.y === b.y && a.width === b.width &&
+    a.height === b.height && a.dock === b.dock && a.expanded === b.expanded && a.panelOpen === b.panelOpen
 }
 
 /** 没有 anchor 事件时（旧版阿源 / 事件丢失）从 DOM 邻居 rect 反推等效 anchor；dock 由半出屏几何推断。 */
@@ -685,7 +699,7 @@ function readAvoidRects(doc, win) {
 // 说明：位置计算不再用 elementFromPoint 探测页面内容（会把宿主侧栏/阿源浮层误判成占用，
 // 导致电话失去贴邻居的槽位、掉到右下角被浮层挡住）；现在只由 computePhoneSpot(anchor) 派生。
 
-const BUILD_TAG = 'ui2-dock4-stt-2-mic-toggle'
+const BUILD_TAG = 'ui2-dock4-stt-3-perf'
 
 function reportMetrics(payload) {
   payload.buildTag = BUILD_TAG
@@ -809,7 +823,8 @@ export function createLauncher({ React, h }) {
       const tick = () => {
         if (stopped) return
         const now = Date.now()
-        if (document.visibilityState !== 'hidden' && now - (tick.at || 0) >= 83) {
+        // 整排拖动期间锚点事件已经按帧驱动电话位置；暂停 DOM 轮询，避免拖动时再叠 12Hz 的整树重渲染。
+        if (document.visibilityState !== 'hidden' && !rowDragging && now - (tick.at || 0) >= 83) {
           tick.at = now
           const next = readNeighbors(document, window)
           if (!last || !sameRowState(next, last)) {
@@ -846,8 +861,34 @@ export function createLauncher({ React, h }) {
     const placeRef = useRef(null)
     const lastPlaceSigRef = useRef('')
     const lastPlaceModeRef = useRef(null)
+    // 重排输入签名：内容/邻居/锚点没变就不必每 120ms 读一遍 DOM（空闲时从 ~8 次/秒降到 ~1.7 次/秒）。
+    const placeInputsRef = useRef('')
+    const lastPlaceInputsRef = useRef('')
+    const lastPlaceAtRef = useRef(0)
+    const forcePlaceRef = useRef(false)
+    // 字幕增量合并：上游按 token 流式下发，逐条 setState 会按 WS 消息频率重渲染整个面板；
+    // 合并到每帧最多一次，拖动/播报同时发生时明显减负。
+    const transcriptQueueRef = useRef([])
+    const transcriptRafRef = useRef(0)
     rowRef.current = row
     bubbleVisibleRef.current = bubbleVisible
+
+    const queueTranscript = (event) => {
+      transcriptQueueRef.current.push(event)
+      if (transcriptRafRef.current) return
+      transcriptRafRef.current = requestAnimationFrame(() => {
+        transcriptRafRef.current = 0
+        const queued = transcriptQueueRef.current
+        transcriptQueueRef.current = []
+        if (!queued.length) return
+        setTranscript((prev) => queued.reduce(reduceTranscript, prev))
+      })
+    }
+
+    useEffect(() => () => {
+      if (transcriptRafRef.current) { cancelAnimationFrame(transcriptRafRef.current); transcriptRafRef.current = 0 }
+      transcriptQueueRef.current = []
+    }, [])
 
     useEffect(() => {
       const onKey = (event) => { if (event.key === 'Escape') onClose() }
@@ -860,7 +901,7 @@ export function createLauncher({ React, h }) {
         onState: setState,
         onStep: setStep,
         onDetail: setDetail,
-        onTranscript: (event) => setTranscript((prev) => reduceTranscript(prev, event)),
+        onTranscript: queueTranscript,
         onMic: setMic,
         onMuted: setMuted,
         onDiag: setDiag,
@@ -876,8 +917,13 @@ export function createLauncher({ React, h }) {
     placeRef.current = () => {
       const el = panelRef.current
       if (!el) return
+      const nowMs = typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now()
+      if (!forcePlaceRef.current && placeInputsRef.current === lastPlaceInputsRef.current && nowMs - lastPlaceAtRef.current < 600) return
+      forcePlaceRef.current = false
+      lastPlaceInputsRef.current = placeInputsRef.current
+      lastPlaceAtRef.current = nowMs
       const view = { width: innerWidth, height: innerHeight }
-      const rawRow = rowRef.current || readNeighbors(document, window)
+      const rawRow = rowRef.current
       const rowNow = bubbleVisibleRef.current === false ? Object.assign({}, rawRow, { bubble: null, sameRow: false }) : rawRow
       const avoid = readAvoidRects(document, window)
       const phoneRect = rectFromElement(document.querySelector('.va-phone'))
@@ -915,7 +961,7 @@ export function createLauncher({ React, h }) {
       const nowMs = () => (typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now())
       const run = (force) => {
         if (!placeRef.current) return
-        if (document.visibilityState === 'hidden' || launcherDragging) return
+        if (document.visibilityState === 'hidden' || launcherDragging || rowDragging) return
         const now = nowMs()
         if (!force && now - lastAt < PLACE_MIN_INTERVAL_MS) return
         lastAt = now
@@ -923,7 +969,7 @@ export function createLauncher({ React, h }) {
       }
       const loop = () => { run(false); raf = requestAnimationFrame(loop) }
       loop()
-      const onResize = () => run(true)
+      const onResize = () => { forcePlaceRef.current = true; run(true) }
       window.addEventListener('resize', onResize)
       return () => {
         cancelAnimationFrame(raf)
@@ -949,6 +995,17 @@ export function createLauncher({ React, h }) {
     }
     const pass = metrics ? metrics.pass : null
     const metricLine = formatMetricsLine(metrics)
+    // 每帧渲染只登记「重排输入」的纯状态签名（不碰 DOM）；placeRef 在下一帧用它判断要不要真读布局。
+    placeInputsRef.current = [
+      innerWidth, innerHeight,
+      row.ball ? Math.round(row.ball.left) + ':' + Math.round(row.ball.top) + ':' + Math.round(row.ball.width) : '-',
+      row.bubble ? Math.round(row.bubble.left) + ':' + Math.round(row.bubble.top) : '-',
+      anchorRect ? Math.round(anchorRect.left) + ':' + Math.round(anchorRect.top) + ':' + Math.round(anchorRect.width) : '-',
+      bubbleVisible ? '1' : '0',
+      transcript.user.length, transcript.assistant.length,
+      step.length, detail.length, diag.length,
+      mic, muted ? '1' : '0', pass == null ? '?' : String(pass),
+    ].join('|')
     const panelStyle = {
       left: box ? box.left : 0,
       top: box ? box.top : 0,
@@ -1018,6 +1075,16 @@ export function createLauncher({ React, h }) {
       diag ? h('div', { className: 'va-diag__line' }, diag) : null))
   }
 
+  // 拖动整排按钮时面板位置冻结（place 循环让路），此时几何 props 的变化不值得重渲染整棵面板；
+  // 面板内容（字幕/状态）由它自己的 state 驱动，不受影响。松手后 rowDragging=false + refreshRow()，
+  // 父组件补一帧完整渲染，面板按新槽位重新落位。
+  const VoicePanelMemo = typeof React.memo === 'function'
+    ? React.memo(VoicePanel, (prev, next) => {
+      if (!rowDragging) return false
+      return prev.metrics === next.metrics && prev.bubbleVisible === next.bubbleVisible
+    })
+    : VoicePanel
+
   function VoiceLauncher() {
     const [open, setOpen] = useState(false)
     const [offset, setOffset] = useState({ dx: 0, dy: 0 })
@@ -1039,21 +1106,109 @@ export function createLauncher({ React, h }) {
     const anchorSourceRef = useRef('none')
     const [anchorTick, setAnchorTick] = useState(0)
     const [bubbleVisible, setBubbleVisible] = useState(true)
+    // 锚点事件：拖动时阿源按 pointermove 频率广播，原来每来一条就 setState 一次，
+    // 等于按事件频率重渲染整个通话面板。现在合并到每帧最多一次，并跳过完全相同的值。
     useEffect(() => {
-      const onAnchor = (event) => {
-        const detail = event && event.detail
-        if (!detail || typeof detail.visible !== 'boolean') return
-        setBubbleVisible(detail.visible !== false)
-        if (detail.visible === false) return
-        const next = readAnchorFromEvent(detail)
-        if (!next) return
+      let pending = null
+      let raf = 0
+      const flush = () => {
+        raf = 0
+        const next = pending
+        pending = null
+        if (!next || sameAnchorSnapshot(next, lastAnchorRef.current)) return
         anchorEventRef.current = next
         lastAnchorRef.current = next
         setAnchorTick((value) => (value + 1) % 1000000)
       }
+      const onAnchor = (event) => {
+        const detail = event && event.detail
+        if (!detail || typeof detail.visible !== 'boolean') return
+        const visible = detail.visible !== false
+        setBubbleVisible((prev) => (prev === visible ? prev : visible))
+        if (!visible) return
+        const next = readAnchorFromEvent(detail)
+        if (!next) return
+        pending = next
+        if (!raf) raf = requestAnimationFrame(flush)
+      }
       window.addEventListener('ayuan:launcher-anchor-v1', onAnchor)
       try { window.dispatchEvent(new Event('leo-quick:anchor-request-v1')) } catch {}
-      return () => window.removeEventListener('ayuan:launcher-anchor-v1', onAnchor)
+      return () => {
+        window.removeEventListener('ayuan:launcher-anchor-v1', onAnchor)
+        if (raf) cancelAnimationFrame(raf)
+      }
+    }, [])
+    // 整排拖动（leo-quick 协议，任意一个按钮发起）：拖动期间让出指标测量（它要量几何/computedStyle，
+    // 会和拖动抢布局），并顺手统计拖动窗口的帧间隔上报 /voice-ayuan/report（kind=drag-perf）。
+    useEffect(() => {
+      let probe = null
+      let raf = 0
+      const stopDrag = () => {
+        const wasDragging = rowDragging
+        rowDragging = false
+        if (rowDragTimer) { clearTimeout(rowDragTimer); rowDragTimer = null }
+        // 拖动期间暂停了 DOM 轮询，松手后立刻补一次，面板立刻回到正确槽位。
+        if (wasDragging) { try { refreshRow() } catch {} }
+      }
+      const finish = () => {
+        raf = 0
+        const done = probe
+        probe = null
+        stopDrag()
+        if (!done || !done.deltas.length) return
+        let sum = 0
+        let max = 0
+        let slow = 0
+        for (const delta of done.deltas) {
+          sum += delta
+          if (delta > max) max = delta
+          if (delta >= 32) slow += 1
+        }
+        try {
+          reportMetrics({
+            kind: 'drag-perf',
+            source: 'voice-ayuan-launcher',
+            at: new Date().toISOString(),
+            url: location.href,
+            stats: {
+              moves: done.moves,
+              frames: done.deltas.length,
+              avgFrameMs: Math.round((sum / done.deltas.length) * 10) / 10,
+              maxFrameMs: Math.round(max * 10) / 10,
+              slowFrames: slow,
+            },
+          })
+        } catch {}
+      }
+      const tick = (ts) => {
+        raf = 0
+        if (!probe) return
+        if (probe.last != null) {
+          probe.deltas.push(ts - probe.last)
+          if (probe.deltas.length > 900) probe.deltas.splice(0, 600)
+        }
+        probe.last = ts
+        if (Date.now() - probe.lastMoveAt > 500) { finish(); return }
+        raf = requestAnimationFrame(tick)
+      }
+      const onMove = (event) => {
+        const detail = event && event.detail
+        rowDragging = true
+        if (rowDragTimer) clearTimeout(rowDragTimer)
+        rowDragTimer = setTimeout(stopDrag, 350)
+        if (detail && detail.end === true) stopDrag()
+        const now = Date.now()
+        if (!probe) { probe = { deltas: [], last: null, lastMoveAt: now, moves: 0 } }
+        probe.moves += 1
+        probe.lastMoveAt = now
+        if (!raf) raf = requestAnimationFrame(tick)
+      }
+      window.addEventListener('leo-quick:launcher-move-v1', onMove)
+      return () => {
+        window.removeEventListener('leo-quick:launcher-move-v1', onMove)
+        if (raf) cancelAnimationFrame(raf)
+        stopDrag()
+      }
     }, [])
     // 窗口最顶部/最底部有一条不可交互带（标题条/边缘），贴到那里会「点不了也拖不动」。
     // 自动把鲸鱼拉回安全区（最多 3 次、间隔 4s），整排跟着回到可点位置。
@@ -1086,28 +1241,26 @@ export function createLauncher({ React, h }) {
       const first = setTimeout(() => { rescue(); setTimeout(() => { stopped = true; clearInterval(timer) }, 12000) }, 500)
       return () => { clearInterval(timer); clearTimeout(first) }
     }, [])
-    // 每次渲染都从 live DOM 读邻居（兄弟按钮位置；旧版兄弟插件没有 anchor 事件时用来反推锚点）。
-    const liveNeighbors = readNeighbors(document, window)
-    if (liveNeighbors && (liveNeighbors.ball || liveNeighbors.bubble)) lastNeighborRef.current = liveNeighbors
-    const row = mergeNeighborSnapshot(liveNeighbors, lastNeighborRef.current) ||
-      rowState || { ball: null, bubble: null, sameRow: false, gap: DEFAULT_GAP, view: { width: innerWidth, height: innerHeight }, fallback: null }
+    // 渲染期不再读 DOM：邻居位置由 useRow 的 ~12Hz 轮询维护，锚点事件已在 rAF 合并进 ref。
+    // 原来这里每次渲染都 readNeighbors + getBoundingClientRect，拖动时每个 pointermove 都会强制一次
+    // 全页布局，再叠加通话面板的整棵子树重渲染 —— 这就是「开着通话面板拖动三个按钮发卡」的主因。
+    useEffect(() => {
+      if (rowState && (rowState.ball || rowState.bubble)) lastNeighborRef.current = rowState
+    }, [rowState])
+    const row = mergeNeighborSnapshot(rowState, lastNeighborRef.current) ||
+      { ball: null, bubble: null, sameRow: false, gap: DEFAULT_GAP, view: { width: innerWidth, height: innerHeight }, fallback: null }
     const coarse = (() => {
       try { return window.matchMedia('(pointer:coarse)').matches } catch { return false }
     })()
-    // 位置来源：DOM 的 x/y 最新（拖动/展开即时生效），dock/expanded 只信事件（DOM 推不出来）。
+    // 锚点优先吃事件里的 x/y：契约 v2 下阿源按 pointermove 广播的就是 DOM 真值，且已合并到 rAF；
+    // 只有事件缺失（旧版阿源）才退回 useRow 轮询的 DOM 快照。
     const domAnchor = anchorFromNeighbors(row, null)
     const eventAnchor = anchorEventRef.current
-    let anchor = null
-    if (domAnchor) {
-      anchor = eventAnchor
-        ? Object.assign({}, eventAnchor, { x: domAnchor.x, y: domAnchor.y, width: domAnchor.width, height: domAnchor.height })
-        : domAnchor
-    } else if (eventAnchor && bubbleVisible) {
-      anchor = eventAnchor
-    }
+    const fromEvent = Boolean(eventAnchor && bubbleVisible)
+    let anchor = fromEvent ? eventAnchor : (domAnchor || null)
     let anchorSource = 'none'
     if (anchor) {
-      anchorSource = 'live'
+      anchorSource = fromEvent ? 'event' : 'derived'
       lastAnchorRef.current = anchor
     } else if (lastAnchorRef.current) {
       anchor = lastAnchorRef.current
@@ -1250,7 +1403,9 @@ export function createLauncher({ React, h }) {
     }, [row.gap, bubbleVisible])
 
     useEffect(() => {
-      const tick = () => { measure() }
+      // 拖动/拖动刚结束的 350ms 内不量几何：measure 会 getComputedStyle + getBoundingClientRect，
+      // 和拖动同帧抢布局（这也是拖动发卡的叠加来源）。松手后由 320ms 定时器自然补测。
+      const tick = () => { if (launcherDragging || rowDragging) return; measure() }
       const interval = setInterval(tick, 320)
       const immediate = setTimeout(tick, 900)
       window.addEventListener('resize', tick)
@@ -1348,7 +1503,7 @@ export function createLauncher({ React, h }) {
         stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round',
         'aria-hidden': true,
       }, h('path', { d: PHONE_PATH }))),
-      open ? h(VoicePanel, {
+      open ? h(VoicePanelMemo, {
         key: 'panel',
         onClose: () => setOpen(false),
         row,
