@@ -199,8 +199,8 @@ pushEnd→response.started 258/290ms，pushEnd→首个 audio.delta 473/474ms（
 
 本地补丁（pip 重装/升级会被覆盖 → **重装后必须重跑**）：
 - `deploy/patch-s2s-mps.py` → `speech_to_speech/STT/paraformer_handler.py`（MPS 空缓存 bug）
-- `deploy/patch-s2s-reasoning.py` → `speech_to_speech/LLM/responses_api_language_model.py`（把 `VOICE_AYUAN_LLM_REASONING_EFFORT` 注入 extra_body.reasoning.effort，DeepSeek 关思考）
-两者都幂等、带 marker、`--check` 可只检查，并自动备份 `.bak-voice*`。
+- `deploy/patch-s2s-tool-delivery.py` → `api/openai_realtime/{handlers/response.py,service.py,websocket_router.py}`（**语音任务 tool-call 事件被静默丢弃**：一次 barge-in 把 `cancel_scope.discarding` 置 True 后，被取消 generation 的 EndOfResponse 又被当 stale 丢弃、TTS 不发 `AUDIO_RESPONSE_DONE`，`response_done()` 永不执行 → 后续 `tools=['spawn_thinking']` 的 AssistantTextEvent 被 `pass` 吞掉。表现：语音前台嘴上说"我去查"但阿源从未收到任务）
+三者都幂等、带 marker、`--check` 可只检查、`--revert` 可回滚，并自动备份 `.bak-voice*`。
 
 ---
 
@@ -211,6 +211,7 @@ pushEnd→response.started 258/290ms，pushEnd→首个 audio.delta 473/474ms（
 - 2026-10-29：`--num_pipelines 2` 实测可用（GPU1 约 28.7GB / 49.1GB，留 ~20GB 余量），并发双会话不再互相饿死。
 - 待办：宿主 DSH 重启把网关切回 `18765` 后，**关掉 Lead 临时起的 8765→服务器 8765 隧道**（避免两套隧道并存；只留插件自己那条 18765）。
 - 2026-10-29 23:40：实时层 LLM 从本地 Qwen3-4B 切换为 **DeepSeek V4.1 Flash**（responses-api + reasoning.effort=none + 流式，2 pipeline 不变）。启动 54s→27s，GPU1 29.8GB→13.3GB；生产网关 e2e 通过，pushEnd→首音频 473/474ms（Qwen 基线 1146ms）。旧配置备份 `scripts/start.sh.bak-qwen3-4b`，回滚见 §8。
+- 2026-10-30 19:41：修复「语音说了去办、实际没派活」——上游 barge-in 后 `cancel_scope.discarding` 残留导致 tool-call 事件被静默丢弃（详见 §10）。服务已打补丁并重启；验证：forced-tool 复现 10/10 收到 `function_call` 且严格早于 `response.done`；真链路 `test/voice-delegation-e2e.mjs` 通过（说→派活→阿源执行 31s→语音回报）。
 
 ---
 
@@ -292,3 +293,66 @@ ssh -p 44022 qiu_team@58.246.75.58 '
 - 服务器只写镜像目录：`~/co-dir/voice-ayuan`、`/mnt/data/co-dir/voice-ayuan`；systemd 单元属于用户配置（`~/.config/systemd/user/`）。
 - 禁止用 `pkill -f` 盲杀；先 `ps -o pid,etime,cmd` 确认。
 - 改脚本后同步两处：仓库 `deploy/`（源码）+ 服务器 `scripts/`，避免漂移。
+
+---
+
+## 10. tool-call 投递可靠性（2026-10-30 修复，重装 s2s 后必查）
+
+### 10.1 故障现象（真机 2026-10-30 19:07:53）
+用户说「帮我查一下明天我该做点什么」，语音前台回「好我去看看…查完告诉你」，但阿源从未收到任务、DSH 会话零写入，之后只会反复说"我再跑一趟"。
+
+日志对不上：服务端有 `Sending to clients: text='', tools=['spawn_thinking']`，客户端（网关）却完全没有 `realtime.tool_call.received`；同会话 20 秒后的 `get_agent_task_status` 又能正常到达。
+
+### 10.2 根因（上游 + 我们魔改组合下的状态机 bug）
+1. 更早一次用户插话触发 barge-in → `cancel_scope.cancel()` 把 `discarding` 置 True；
+2. 被取消那次 generation 的 `EndOfResponse` 在 `LMOutputProcessor` 里又被判 stale 丢弃 → TTS 永远不发 `AUDIO_RESPONSE_DONE` → `cancel_scope.response_done()` 从不执行 → **`discarding` 一直 True**；
+3. 之后 LM 输出「说话文本」+「tools=[spawn_thinking]」两个 AssistantTextEvent，`_send_loop_for()` 的 `if discarding and isinstance(...): pass` 把两个都静默吞掉；
+4. 音频（走 output_queue）和 `response.done`（audio 路径 `_ensure_response()` 生成）照常到达 → 用户听到"我会去办"，网关却拿不到 function_call，于是没有任务、没有回执。
+
+次路径：`_drain_pending_response_events()` 的 `if discarding: continue` 同样会吞；另外 `on_assistant_text()` 的 reopen-grace 裁决、打断时的 `_flush_queue(preserve=_keep_user_text_event)` 也会丢。
+
+### 10.3 修复原则（patch-s2s-tool-delivery.py）
+- **tool-bearing AssistantTextEvent（`event.tools` 非空）是终态可交付输出**：绕过 reopen grace / staleness / discarding / flush / drain，立即派发，并保证在同一个 response 的 `response.done` 之前送到客户端（网关用它查 presentation 上下文，晚到会被判 stale 而再丢一次）。
+- 唯一允许的丢弃：**重复 call_id**（已发过），且必须 INFO 记录；其它原本静默的丢弃路径全部加 INFO 日志，前缀 `voice-ayuan tool-delivery:`。
+- 纯文本（无 tools）AssistantTextEvent 在 discarding 时仍按上游设计丢弃（现在会打 INFO，不再静默）；音频与 tool 事件不受影响。
+
+### 10.4 重装 / 升级 s2s 后的操作
+```bash
+# 1) 把仓库脚本同步到服务器（本仓库约定：deploy/ 是源码，服务器 scripts/ 是运行副本）
+scp deploy/patch-s2s-tool-delivery.py sy:~/co-dir/voice-ayuan/scripts/
+
+# 2) 检查 / 打补丁（幂等；改前自动备份 *.bak-voice-toolfix）
+ssh sy "cd ~/co-dir/voice-ayuan && python3 scripts/patch-s2s-tool-delivery.py --check"
+ssh sy "cd ~/co-dir/voice-ayuan && python3 scripts/patch-s2s-tool-delivery.py"
+
+# 3) 重启并确认就绪（约 30s）
+ssh sy "systemctl --user restart s2s-voice"
+ssh sy "journalctl --user -u s2s-voice -n 30 --no-pager"   # 不应有 Traceback/ERROR
+
+# 4) 回滚（如升级后行为异常）
+ssh sy "cd ~/co-dir/voice-ayuan && python3 scripts/patch-s2s-tool-delivery.py --revert && systemctl --user restart s2s-voice"
+```
+
+### 10.5 验证手段（仓库内，无需人耳）
+```bash
+# A. 直连上游的确定性复现（强制 spawn_thinking；修复前丢、修复后 10/10 收到）
+node deploy/repro/repro-tool-drop.mjs gen
+REPRO_FORCE_TOOL=1 node deploy/repro/repro-tool-drop.mjs run --runs 5
+# 判据：每个 run JSON 里 functionCallReceived=true 且 functionCallBeforeResponseDone=true
+
+# B. 真链路端到端（真实前端客户端模块 → 运行中的插件宿主 → 网关 → 上游 → bridge → DSH 会话 → 语音回报）
+node test/voice-delegation-e2e.mjs            # 正常一轮
+node test/voice-delegation-e2e.mjs --race     # 助手说话时注入 160ms 微噪声（复现 speculative reopen）
+# 判据：PASS gateway-received-spawn_thinking / bridge-task-accepted / bridge-task-terminal / assistant-transcript
+```
+
+### 10.6 修复后的服务端正常日志样例
+```
+Sending to clients: text='', tools=['spawn_thinking']
+Pipeline 0: delivering 1 tool call(s) despite discarding=True (turn=turn_1 rev=1)
+voice-ayuan tool-delivery: delivering tool call(s) ['spawn_thinking'] (commit_result=True)
+Response done (status=completed)      ← tool 事件严格早于它（实测 0.24–0.56ms 边距）
+```
+
+> 若再次出现"说了去办却没任务"：先看客户端 `~/.config/qwaudio/state/logs/gateway.log` 有没有 `realtime.tool_call.received`；有 → 查 bridge；没有 → 查服务端 journal 是否有 `Sending to clients ... tools=[...]` 以及 `delivering/dropping` 日志，并重跑 §10.4 的 `--check`。
+
