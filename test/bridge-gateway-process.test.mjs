@@ -85,6 +85,11 @@ test('bridge 路径：自定义入口 + bridge env 注入 + dsh-session 后端',
     assert.equal(health.backend?.protocol, 'dsh-session')
     assert.equal(health.backend?.enabled, true)
     // 子进程确实拿着 bridgeUrl/token 访问了宿主桥（health probe）。
+    // Gateway readiness precedes the asynchronous backend health probe.
+    const healthDeadline = Date.now() + 5000
+    while (!mock.requests.some(item => item.type === 'health') && Date.now() < healthDeadline) {
+      await new Promise(resolve => setTimeout(resolve, 25))
+    }
     assert.ok(mock.requests.some(item => item.type === 'health'), 'gateway 子进程应访问 mock 宿主桥 health')
   } finally {
     await gateway.stop()
