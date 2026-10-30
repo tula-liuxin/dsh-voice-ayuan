@@ -521,6 +521,9 @@ test('cwdPrefix：工作区有 live 会话就只投它（不新建、不串台�
     assert.equal(health.payload.resolution.mode, 'workspace-live')
     assert.equal(health.payload.autoCreateSession, true)
     assert.equal(health.payload.sessionTitle, '语音通话')
+    assert.equal(health.payload.host.sessionController, true)
+    assert.equal(health.payload.host.create, true)
+    assert.equal(health.payload.host.resolveAgent, true)
     assert.equal(controller.created.length, 0)
 
     const task = await requestJson(host.bridge, 'POST', '/tasks', {
