@@ -1,0 +1,96 @@
+{
+  "run": 2,
+  "withBargein": false,
+  "url": "ws://127.0.0.1:18765/v1/realtime",
+  "promptFile": "C:\\Users\\23677\\Desktop\\dsh-plugins\\voice-ayuan\\prompt\\PROMPT.md",
+  "injectedBargein": false,
+  "speechStarts": 2,
+  "toolCalls": [
+    {
+      "name": "spawn_thinking",
+      "callId": "call_3dc3f842deda40d4a2b69a445415ee61",
+      "at": "11.496",
+      "responseId": "resp_44b1409db9de490690400b3fcdde1696"
+    }
+  ],
+  "responseDone": [
+    {
+      "at": "11.497",
+      "status": "completed",
+      "responseId": "resp_44b1409db9de490690400b3fcdde1696"
+    }
+  ],
+  "assistantTranscripts": [],
+  "audioDeltas": 0,
+  "audioSeconds": 0,
+  "errors": [],
+  "eventOrder": [
+    "tool_call",
+    "response.done"
+  ],
+  "functionCallReceived": true,
+  "functionCallBeforeResponseDone": true,
+  "toolCallToResponseDoneMs": 0.288,
+  "timeline": [
+    {
+      "at": 8.1741461,
+      "type": "input_audio_buffer.speech_started",
+      "responseId": "",
+      "status": "",
+      "callId": "",
+      "name": "",
+      "transcript": "",
+      "itemType": ""
+    },
+    {
+      "at": 8.9417636,
+      "type": "input_audio_buffer.speech_stopped",
+      "responseId": "",
+      "status": "",
+      "callId": "",
+      "name": "",
+      "transcript": "",
+      "itemType": ""
+    },
+    {
+      "at": 9.2753997,
+      "type": "input_audio_buffer.speech_started",
+      "responseId": "",
+      "status": "",
+      "callId": "",
+      "name": "",
+      "transcript": "",
+      "itemType": ""
+    },
+    {
+      "at": 10.483214,
+      "type": "input_audio_buffer.speech_stopped",
+      "responseId": "",
+      "status": "",
+      "callId": "",
+      "name": "",
+      "transcript": "",
+      "itemType": ""
+    },
+    {
+      "at": 11.4962409,
+      "type": "response.function_call_arguments.done",
+      "responseId": "resp_44b1409db9de490690400b3fcdde1696",
+      "status": "",
+      "callId": "call_3dc3f842deda40d4a2b69a445415ee61",
+      "name": "spawn_thinking",
+      "transcript": "",
+      "itemType": ""
+    },
+    {
+      "at": 11.4965156,
+      "type": "response.done",
+      "responseId": "resp_44b1409db9de490690400b3fcdde1696",
+      "status": "completed",
+      "callId": "",
+      "name": "",
+      "transcript": "",
+      "itemType": ""
+    }
+  ]
+}

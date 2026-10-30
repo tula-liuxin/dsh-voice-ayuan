@@ -1,0 +1,88 @@
+{
+  "run": 1,
+  "withBargein": false,
+  "url": "ws://127.0.0.1:18765/v1/realtime",
+  "promptFile": "C:\\Users\\23677\\Desktop\\dsh-plugins\\voice-ayuan\\prompt\\PROMPT.md",
+  "injectedBargein": false,
+  "speechStarts": 2,
+  "toolCalls": [],
+  "responseDone": [
+    {
+      "at": "4.847",
+      "status": "completed",
+      "responseId": "resp_4c9d464ef54d4eed8f02809762a30e78"
+    }
+  ],
+  "assistantTranscripts": [],
+  "audioDeltas": 14,
+  "audioSeconds": 2.27,
+  "errors": [],
+  "eventOrder": [
+    "response.created",
+    "response.done"
+  ],
+  "functionCallReceived": false,
+  "functionCallBeforeResponseDone": false,
+  "timeline": [
+    {
+      "at": 0.883,
+      "type": "input_audio_buffer.speech_started",
+      "responseId": "",
+      "status": "",
+      "callId": "",
+      "name": "",
+      "transcript": "",
+      "itemType": ""
+    },
+    {
+      "at": 1.661,
+      "type": "input_audio_buffer.speech_stopped",
+      "responseId": "",
+      "status": "",
+      "callId": "",
+      "name": "",
+      "transcript": "",
+      "itemType": ""
+    },
+    {
+      "at": 1.985,
+      "type": "input_audio_buffer.speech_started",
+      "responseId": "",
+      "status": "",
+      "callId": "",
+      "name": "",
+      "transcript": "",
+      "itemType": ""
+    },
+    {
+      "at": 3.2,
+      "type": "input_audio_buffer.speech_stopped",
+      "responseId": "",
+      "status": "",
+      "callId": "",
+      "name": "",
+      "transcript": "",
+      "itemType": ""
+    },
+    {
+      "at": 4.398,
+      "type": "response.created",
+      "responseId": "resp_4c9d464ef54d4eed8f02809762a30e78",
+      "status": "in_progress",
+      "callId": "",
+      "name": "",
+      "transcript": "",
+      "itemType": ""
+    },
+    {
+      "at": 4.847,
+      "type": "response.done",
+      "responseId": "resp_4c9d464ef54d4eed8f02809762a30e78",
+      "status": "completed",
+      "callId": "",
+      "name": "",
+      "transcript": "",
+      "itemType": ""
+    }
+  ]
+}

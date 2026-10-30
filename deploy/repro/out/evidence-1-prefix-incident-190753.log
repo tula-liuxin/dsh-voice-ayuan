@@ -1,0 +1,20 @@
+2026-10-30 19:07:43,718 - [pipeline 0] speech_to_speech.api.openai_realtime.websocket_router - INFO - Client connected to pipeline 0 (session session_a96232f6a46e45ee917ac597b6006d73)
+2026-10-30 19:07:43,789 - [pipeline 0] speech_to_speech.api.openai_realtime.handlers.session - INFO - Session configuration updated
+2026-10-30 19:07:45,895 - [pipeline 0] speech_to_speech.VAD.vad_handler - INFO - Speech started (confirmed, active=384ms, min=384ms, segment=384ms, turn=turn_1 rev=0)
+  0%|[34m          [0m| 0/1 [00:00<?, ?it/s]2026-10-30 19:07:48,012 - [pipeline 0] speech_to_speech.VAD.vad_handler - INFO - Speech soft-ended (segment=3092ms, active=2496ms, turn=turn_1 rev=0)
+2026-10-30 19:07:48,446 - [pipeline 0] speech_to_speech.VAD.vad_handler - INFO - VAD: pending reopen candidate for speculative turn turn_1 revision 1
+2026-10-30 19:07:48,634 - [pipeline 0] speech_to_speech.VAD.vad_handler - INFO - VAD: reopened speculative turn turn_1 revision 1
+2026-10-30 19:07:48,634 - [pipeline 0] speech_to_speech.VAD.vad_handler - INFO - Speech started (confirmed, active=192ms, min=192ms, segment=192ms, turn=turn_1 rev=1)
+  0%|[34m          [0m| 0/1 [00:00<?, ?it/s]2026-10-30 19:07:48,640 - [pipeline 0] speech_to_speech.api.openai_realtime.websocket_router - INFO - Pipeline 0: speech during pending response: cancelled, queue flushed
+2026-10-30 19:07:48,804 - [pipeline 0] speech_to_speech.LLM.responses_api_language_model - INFO - LLM generation cancelled (interruption)
+2026-10-30 19:07:49,636 - [pipeline 0] speech_to_speech.VAD.vad_handler - INFO - Speech soft-ended (segment=1600ms, active=1120ms, turn=turn_1 rev=1)
+  0%|[34m          [0m| 0/1 [00:00<?, ?it/s]2026-10-30 19:07:49,702 - [pipeline 0] speech_to_speech.VAD.vad_handler - INFO - VAD: pending reopen candidate for speculative turn turn_1 revision 2
+2026-10-30 19:07:49,883 - [pipeline 0] speech_to_speech.VAD.vad_handler - INFO - VAD: reopened speculative turn turn_1 revision 2
+2026-10-30 19:07:49,883 - [pipeline 0] speech_to_speech.VAD.vad_handler - INFO - Speech started (confirmed, active=192ms, min=192ms, segment=192ms, turn=turn_1 rev=2)
+  0%|[34m          [0m| 0/1 [00:00<?, ?it/s]2026-10-30 19:07:51,515 - [pipeline 0] speech_to_speech.VAD.vad_handler - INFO - Speech soft-ended (segment=1888ms, active=1760ms, turn=turn_1 rev=2)
+2026-10-30 19:07:53,143 - [pipeline 0] speech_to_speech.VAD.vad_handler - INFO - VAD: pending reopen candidate for speculative turn turn_1 revision 3
+2026-10-30 19:07:53,308 - [pipeline 0] speech_to_speech.LLM.lm_output_processor - INFO - Sending to clients: text='', tools=['spawn_thinking']
+2026-10-30 19:07:53,500 - [pipeline 0] speech_to_speech.TTS.qwen3_tts_handler - INFO - Qwen3-TTS TTFA: 0.19s (custom_voice)
+2026-10-30 19:07:54,429 - [pipeline 0] speech_to_speech.TTS.qwen3_tts_handler - INFO - Qwen3-TTS generated 4.68s audio in 1.12s (RTF: 4.17, custom_voice)
+2026-10-30 19:07:54,452 - [pipeline 0] speech_to_speech.api.openai_realtime.handlers.response - INFO - Response done (status=completed) — this response: input_tokens=3869, output_tokens=157, audio=6.58s | cumulative: input_tokens=123630, output_tokens=1720, audio=95.41s
+2026-10-30 19:07:54,453 - [pipeline 0] speech_to_speech.api.openai_realtime.websocket_router - INFO - Pipeline 0: response complete, listening re-enabled

@@ -1,0 +1,95 @@
+{
+  "run": 2,
+  "withBargein": false,
+  "url": "ws://127.0.0.1:18765/v1/realtime",
+  "promptFile": "C:\\Users\\23677\\Desktop\\dsh-plugins\\voice-ayuan\\prompt\\PROMPT.md",
+  "injectedBargein": false,
+  "speechStarts": 2,
+  "toolCalls": [
+    {
+      "name": "spawn_thinking",
+      "callId": "call_e65d7b274c204eeda4e63ec50178543b",
+      "at": "11.546",
+      "responseId": "resp_9b33e857428f40c5b4d01023653507d8"
+    }
+  ],
+  "responseDone": [
+    {
+      "at": "11.546",
+      "status": "completed",
+      "responseId": "resp_9b33e857428f40c5b4d01023653507d8"
+    }
+  ],
+  "assistantTranscripts": [],
+  "audioDeltas": 0,
+  "audioSeconds": 0,
+  "errors": [],
+  "eventOrder": [
+    "tool_call",
+    "response.done"
+  ],
+  "functionCallReceived": true,
+  "functionCallBeforeResponseDone": true,
+  "timeline": [
+    {
+      "at": 8.185,
+      "type": "input_audio_buffer.speech_started",
+      "responseId": "",
+      "status": "",
+      "callId": "",
+      "name": "",
+      "transcript": "",
+      "itemType": ""
+    },
+    {
+      "at": 8.962,
+      "type": "input_audio_buffer.speech_stopped",
+      "responseId": "",
+      "status": "",
+      "callId": "",
+      "name": "",
+      "transcript": "",
+      "itemType": ""
+    },
+    {
+      "at": 9.287,
+      "type": "input_audio_buffer.speech_started",
+      "responseId": "",
+      "status": "",
+      "callId": "",
+      "name": "",
+      "transcript": "",
+      "itemType": ""
+    },
+    {
+      "at": 10.494,
+      "type": "input_audio_buffer.speech_stopped",
+      "responseId": "",
+      "status": "",
+      "callId": "",
+      "name": "",
+      "transcript": "",
+      "itemType": ""
+    },
+    {
+      "at": 11.546,
+      "type": "response.function_call_arguments.done",
+      "responseId": "resp_9b33e857428f40c5b4d01023653507d8",
+      "status": "",
+      "callId": "call_e65d7b274c204eeda4e63ec50178543b",
+      "name": "spawn_thinking",
+      "transcript": "",
+      "itemType": ""
+    },
+    {
+      "at": 11.546,
+      "type": "response.done",
+      "responseId": "resp_9b33e857428f40c5b4d01023653507d8",
+      "status": "completed",
+      "callId": "",
+      "name": "",
+      "transcript": "",
+      "itemType": ""
+    }
+  ]
+}

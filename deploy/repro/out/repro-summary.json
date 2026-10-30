@@ -1,0 +1,13 @@
+{
+  "mode": "baseline",
+  "runs": 1,
+  "ok": 1,
+  "reports": [
+    {
+      "run": 1,
+      "received": true,
+      "beforeDone": true,
+      "toolCalls": 2
+    }
+  ]
+}

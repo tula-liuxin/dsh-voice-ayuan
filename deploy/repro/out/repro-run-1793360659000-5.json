@@ -1,0 +1,96 @@
+{
+  "run": 5,
+  "withBargein": false,
+  "url": "ws://127.0.0.1:18765/v1/realtime",
+  "promptFile": "C:\\Users\\23677\\Desktop\\dsh-plugins\\voice-ayuan\\prompt\\PROMPT.md",
+  "injectedBargein": false,
+  "speechStarts": 2,
+  "toolCalls": [
+    {
+      "name": "spawn_thinking",
+      "callId": "call_5b0199707da6445aa87a73b30b036d8e",
+      "at": "33.495",
+      "responseId": "resp_c2254ec2e1b045e6ae1f6211416caaab"
+    }
+  ],
+  "responseDone": [
+    {
+      "at": "33.495",
+      "status": "completed",
+      "responseId": "resp_c2254ec2e1b045e6ae1f6211416caaab"
+    }
+  ],
+  "assistantTranscripts": [],
+  "audioDeltas": 0,
+  "audioSeconds": 0,
+  "errors": [],
+  "eventOrder": [
+    "tool_call",
+    "response.done"
+  ],
+  "functionCallReceived": true,
+  "functionCallBeforeResponseDone": true,
+  "toolCallToResponseDoneMs": 0.564,
+  "timeline": [
+    {
+      "at": 30.1797948,
+      "type": "input_audio_buffer.speech_started",
+      "responseId": "",
+      "status": "",
+      "callId": "",
+      "name": "",
+      "transcript": "",
+      "itemType": ""
+    },
+    {
+      "at": 30.948199199999998,
+      "type": "input_audio_buffer.speech_stopped",
+      "responseId": "",
+      "status": "",
+      "callId": "",
+      "name": "",
+      "transcript": "",
+      "itemType": ""
+    },
+    {
+      "at": 31.271524499999998,
+      "type": "input_audio_buffer.speech_started",
+      "responseId": "",
+      "status": "",
+      "callId": "",
+      "name": "",
+      "transcript": "",
+      "itemType": ""
+    },
+    {
+      "at": 32.4698688,
+      "type": "input_audio_buffer.speech_stopped",
+      "responseId": "",
+      "status": "",
+      "callId": "",
+      "name": "",
+      "transcript": "",
+      "itemType": ""
+    },
+    {
+      "at": 33.4948823,
+      "type": "response.function_call_arguments.done",
+      "responseId": "resp_c2254ec2e1b045e6ae1f6211416caaab",
+      "status": "",
+      "callId": "call_5b0199707da6445aa87a73b30b036d8e",
+      "name": "spawn_thinking",
+      "transcript": "",
+      "itemType": ""
+    },
+    {
+      "at": 33.4954464,
+      "type": "response.done",
+      "responseId": "resp_c2254ec2e1b045e6ae1f6211416caaab",
+      "status": "completed",
+      "callId": "",
+      "name": "",
+      "transcript": "",
+      "itemType": ""
+    }
+  ]
+}

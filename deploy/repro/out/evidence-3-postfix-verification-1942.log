@@ -1,0 +1,193 @@
+2026-10-30 19:42:19,161 - [pipeline 0] speech_to_speech.VAD.vad_handler - INFO - Speech started (confirmed, active=384ms, min=384ms, segment=416ms, turn=turn_1 rev=0)
+
+USER: 帮我查一
+
+USER: 帮我查一下啊
+2026-10-30 19:42:19,926 - [pipeline 0] speech_to_speech.VAD.vad_handler - INFO - Speech soft-ended (segment=1152ms, active=960ms, turn=turn_1 rev=0)
+
+USER: 帮我查一下啊
+2026-10-30 19:42:19,981 - [pipeline 0] speech_to_speech.STT.transcription_notifier - INFO - Transcription completed: 帮我查一下啊
+2026-10-30 19:42:20,037 - [pipeline 0] speech_to_speech.VAD.vad_handler - INFO - VAD: pending reopen candidate for speculative turn turn_1 revision 1
+2026-10-30 19:42:20,199 - [pipeline 0] httpx - INFO - HTTP Request: POST https://api.deepseek.com/v1/responses "HTTP/1.1 200 OK"
+2026-10-30 19:42:20,251 - [pipeline 0] speech_to_speech.VAD.vad_handler - INFO - VAD: reopened speculative turn turn_1 revision 1
+2026-10-30 19:42:20,251 - [pipeline 0] speech_to_speech.VAD.vad_handler - INFO - Speech started (confirmed, active=192ms, min=192ms, segment=192ms, turn=turn_1 rev=1)
+
+
+USER: 帮我查一下啊明天
+2026-10-30 19:42:20,597 - [pipeline 0] speech_to_speech.LLM.responses_api_language_model - INFO - LLM generation cancelled (interruption)
+
+USER: 帮我查一下啊明天我该做
+
+USER: 帮我查一下明天我该做点什么
+2026-10-30 19:42:21,449 - [pipeline 0] speech_to_speech.VAD.vad_handler - INFO - Speech soft-ended (segment=1408ms, active=1216ms, turn=turn_1 rev=1)
+
+USER: 帮我查一下啊明天我该做点什么
+2026-10-30 19:42:21,512 - [pipeline 0] speech_to_speech.STT.transcription_notifier - INFO - Transcription completed: 帮我查一下啊明天我该做点什么
+2026-10-30 19:42:21,703 - [pipeline 0] httpx - INFO - HTTP Request: POST https://api.deepseek.com/v1/responses "HTTP/1.1 200 OK"
+2026-10-30 19:42:22,449 - [pipeline 0] speech_to_speech.baseHandler - INFO - ResponsesApiModelHandler: 0.936 s
+2026-10-30 19:42:22,450 - [pipeline 0] speech_to_speech.LLM.lm_output_processor - INFO - Sending to clients: text='', tools=['spawn_thinking']
+2026-10-30 19:42:22,457 - [pipeline 0] speech_to_speech.api.openai_realtime.websocket_router - INFO - Pipeline 0: delivering 1 tool call(s) despite discarding=True (turn=turn_1 rev=1)
+2026-10-30 19:42:22,457 - [pipeline 0] speech_to_speech.api.openai_realtime.handlers.response - INFO - voice-ayuan tool-delivery: delivering tool call(s) ['spawn_thinking'] turn=turn_1 rev=1 (commit_result=True)
+2026-10-30 19:42:22,459 - [pipeline 0] speech_to_speech.api.openai_realtime.service - INFO - Token usage (response): input=2889, output=46
+2026-10-30 19:42:22,467 - [pipeline 0] speech_to_speech.api.openai_realtime.handlers.response - INFO - Response done (status=completed) — this response: input_tokens=2889, output_tokens=46, audio=2.56s | cumulative: input_tokens=2889, output_tokens=46, audio=2.56s
+2026-10-30 19:42:22,467 - [pipeline 0] speech_to_speech.api.openai_realtime.websocket_router - INFO - Pipeline 0: response complete, listening re-enabled
+2026-10-30 19:42:24,853 - [pipeline 0] speech_to_speech.api.openai_realtime.websocket_router - INFO - Client session_3d7d130f731f4a58926b97116c4f8988 disconnected from pipeline 0
+2026-10-30 19:42:24,905 - [pipeline 0] speech_to_speech.api.openai_realtime.service - INFO - Session session_3d7d130f731f4a58926b97116c4f8988 unregistered — cumulative: input_tokens=2889, output_tokens=46, audio=2.56s
+2026-10-30 19:42:24,905 - [pipeline 0] speech_to_speech.api.openai_realtime.websocket_router - INFO - Pipeline 0 released (session session_3d7d130f731f4a58926b97116c4f8988 ended)
+INFO:     127.0.0.1:47540 - "WebSocket /v1/realtime" [accepted]
+INFO:     connection open
+2026-10-30 19:42:25,645 - [pipeline 0] speech_to_speech.api.openai_realtime.websocket_router - INFO - Client connected to pipeline 0 (session session_42f6fd760f284021bcec10a2c4968596)
+2026-10-30 19:42:25,717 - [pipeline 0] speech_to_speech.api.openai_realtime.handlers.session - INFO - Session configuration updated
+2026-10-30 19:42:26,459 - [pipeline 0] speech_to_speech.VAD.vad_handler - INFO - Speech started (confirmed, active=384ms, min=384ms, segment=416ms, turn=turn_1 rev=0)
+
+USER: 帮我查一
+
+USER: 帮我查一下啊
+2026-10-30 19:42:27,231 - [pipeline 0] speech_to_speech.VAD.vad_handler - INFO - Speech soft-ended (segment=1152ms, active=960ms, turn=turn_1 rev=0)
+
+USER: 帮我查一下啊
+2026-10-30 19:42:27,284 - [pipeline 0] speech_to_speech.STT.transcription_notifier - INFO - Transcription completed: 帮我查一下啊
+2026-10-30 19:42:27,341 - [pipeline 0] speech_to_speech.VAD.vad_handler - INFO - VAD: pending reopen candidate for speculative turn turn_1 revision 1
+2026-10-30 19:42:27,415 - [pipeline 0] httpx - INFO - HTTP Request: POST https://api.deepseek.com/v1/responses "HTTP/1.1 200 OK"
+2026-10-30 19:42:27,562 - [pipeline 0] speech_to_speech.VAD.vad_handler - INFO - VAD: reopened speculative turn turn_1 revision 1
+2026-10-30 19:42:27,562 - [pipeline 0] speech_to_speech.VAD.vad_handler - INFO - Speech started (confirmed, active=192ms, min=192ms, segment=192ms, turn=turn_1 rev=1)
+
+
+USER: 帮我查一下啊明天
+2026-10-30 19:42:27,885 - [pipeline 0] speech_to_speech.LLM.responses_api_language_model - INFO - LLM generation cancelled (interruption)
+
+USER: 帮我查一下啊明天我该做
+
+USER: 帮我查一下明天我该做点什么
+2026-10-30 19:42:28,765 - [pipeline 0] speech_to_speech.VAD.vad_handler - INFO - Speech soft-ended (segment=1408ms, active=1216ms, turn=turn_1 rev=1)
+
+USER: 帮我查一下啊明天我该做点什么
+2026-10-30 19:42:28,829 - [pipeline 0] speech_to_speech.STT.transcription_notifier - INFO - Transcription completed: 帮我查一下啊明天我该做点什么
+2026-10-30 19:42:28,987 - [pipeline 0] httpx - INFO - HTTP Request: POST https://api.deepseek.com/v1/responses "HTTP/1.1 200 OK"
+2026-10-30 19:42:29,798 - [pipeline 0] speech_to_speech.baseHandler - INFO - ResponsesApiModelHandler: 0.962 s
+2026-10-30 19:42:29,800 - [pipeline 0] speech_to_speech.LLM.lm_output_processor - INFO - Sending to clients: text='', tools=['spawn_thinking']
+2026-10-30 19:42:29,810 - [pipeline 0] speech_to_speech.api.openai_realtime.websocket_router - INFO - Pipeline 0: delivering 1 tool call(s) despite discarding=True (turn=turn_1 rev=1)
+2026-10-30 19:42:29,810 - [pipeline 0] speech_to_speech.api.openai_realtime.handlers.response - INFO - voice-ayuan tool-delivery: delivering tool call(s) ['spawn_thinking'] turn=turn_1 rev=1 (commit_result=True)
+2026-10-30 19:42:29,811 - [pipeline 0] speech_to_speech.api.openai_realtime.service - INFO - Token usage (response): input=2889, output=46
+2026-10-30 19:42:29,811 - [pipeline 0] speech_to_speech.api.openai_realtime.handlers.response - INFO - Response done (status=completed) — this response: input_tokens=2889, output_tokens=46, audio=2.56s | cumulative: input_tokens=5778, output_tokens=92, audio=5.12s
+2026-10-30 19:42:29,812 - [pipeline 0] speech_to_speech.api.openai_realtime.websocket_router - INFO - Pipeline 0: response complete, listening re-enabled
+2026-10-30 19:42:32,161 - [pipeline 0] speech_to_speech.api.openai_realtime.websocket_router - INFO - Client session_42f6fd760f284021bcec10a2c4968596 disconnected from pipeline 0
+2026-10-30 19:42:32,213 - [pipeline 0] speech_to_speech.api.openai_realtime.service - INFO - Session session_42f6fd760f284021bcec10a2c4968596 unregistered — cumulative: input_tokens=5778, output_tokens=92, audio=5.12s
+2026-10-30 19:42:32,213 - [pipeline 0] speech_to_speech.api.openai_realtime.websocket_router - INFO - Pipeline 0 released (session session_42f6fd760f284021bcec10a2c4968596 ended)
+INFO:     127.0.0.1:47544 - "WebSocket /v1/realtime" [accepted]
+INFO:     connection open
+2026-10-30 19:42:32,951 - [pipeline 0] speech_to_speech.api.openai_realtime.websocket_router - INFO - Client connected to pipeline 0 (session session_64a03926bfb0499da16b5c0f75bc0fea)
+2026-10-30 19:42:33,022 - [pipeline 0] speech_to_speech.api.openai_realtime.handlers.session - INFO - Session configuration updated
+2026-10-30 19:42:33,766 - [pipeline 0] speech_to_speech.VAD.vad_handler - INFO - Speech started (confirmed, active=384ms, min=384ms, segment=416ms, turn=turn_1 rev=0)
+
+USER: 帮我查一
+
+USER: 帮我查一下啊
+2026-10-30 19:42:34,531 - [pipeline 0] speech_to_speech.VAD.vad_handler - INFO - Speech soft-ended (segment=1152ms, active=960ms, turn=turn_1 rev=0)
+
+USER: 帮我查一下啊
+2026-10-30 19:42:34,584 - [pipeline 0] speech_to_speech.STT.transcription_notifier - INFO - Transcription completed: 帮我查一下啊
+2026-10-30 19:42:34,644 - [pipeline 0] speech_to_speech.VAD.vad_handler - INFO - VAD: pending reopen candidate for speculative turn turn_1 revision 1
+2026-10-30 19:42:34,828 - [pipeline 0] httpx - INFO - HTTP Request: POST https://api.deepseek.com/v1/responses "HTTP/1.1 200 OK"
+2026-10-30 19:42:34,861 - [pipeline 0] speech_to_speech.VAD.vad_handler - INFO - VAD: reopened speculative turn turn_1 revision 1
+2026-10-30 19:42:34,861 - [pipeline 0] speech_to_speech.VAD.vad_handler - INFO - Speech started (confirmed, active=192ms, min=192ms, segment=192ms, turn=turn_1 rev=1)
+
+
+USER: 帮我查一下啊明天
+2026-10-30 19:42:35,328 - [pipeline 0] speech_to_speech.LLM.responses_api_language_model - INFO - LLM generation cancelled (interruption)
+
+USER: 帮我查一下啊明天我该做
+
+USER: 帮我查一下明天我该做点什么
+2026-10-30 19:42:36,057 - [pipeline 0] speech_to_speech.VAD.vad_handler - INFO - Speech soft-ended (segment=1408ms, active=1216ms, turn=turn_1 rev=1)
+
+USER: 帮我查一下啊明天我该做点什么
+2026-10-30 19:42:36,122 - [pipeline 0] speech_to_speech.STT.transcription_notifier - INFO - Transcription completed: 帮我查一下啊明天我该做点什么
+2026-10-30 19:42:36,271 - [pipeline 0] httpx - INFO - HTTP Request: POST https://api.deepseek.com/v1/responses "HTTP/1.1 200 OK"
+2026-10-30 19:42:37,057 - [pipeline 0] speech_to_speech.baseHandler - INFO - ResponsesApiModelHandler: 0.929 s
+2026-10-30 19:42:37,057 - [pipeline 0] speech_to_speech.LLM.lm_output_processor - INFO - Sending to clients: text='', tools=['spawn_thinking']
+2026-10-30 19:42:37,064 - [pipeline 0] speech_to_speech.api.openai_realtime.websocket_router - INFO - Pipeline 0: delivering 1 tool call(s) despite discarding=True (turn=turn_1 rev=1)
+2026-10-30 19:42:37,064 - [pipeline 0] speech_to_speech.api.openai_realtime.handlers.response - INFO - voice-ayuan tool-delivery: delivering tool call(s) ['spawn_thinking'] turn=turn_1 rev=1 (commit_result=True)
+2026-10-30 19:42:37,065 - [pipeline 0] speech_to_speech.api.openai_realtime.service - INFO - Token usage (response): input=2889, output=47
+2026-10-30 19:42:37,065 - [pipeline 0] speech_to_speech.api.openai_realtime.handlers.response - INFO - Response done (status=completed) — this response: input_tokens=2889, output_tokens=47, audio=2.56s | cumulative: input_tokens=8667, output_tokens=139, audio=7.68s
+2026-10-30 19:42:37,066 - [pipeline 0] speech_to_speech.api.openai_realtime.websocket_router - INFO - Pipeline 0: response complete, listening re-enabled
+2026-10-30 19:42:39,432 - [pipeline 0] speech_to_speech.api.openai_realtime.websocket_router - INFO - Client session_64a03926bfb0499da16b5c0f75bc0fea disconnected from pipeline 0
+2026-10-30 19:42:39,483 - [pipeline 0] speech_to_speech.api.openai_realtime.service - INFO - Session session_64a03926bfb0499da16b5c0f75bc0fea unregistered — cumulative: input_tokens=8667, output_tokens=139, audio=7.68s
+2026-10-30 19:42:39,484 - [pipeline 0] speech_to_speech.api.openai_realtime.websocket_router - INFO - Pipeline 0 released (session session_64a03926bfb0499da16b5c0f75bc0fea ended)
+INFO:     127.0.0.1:50258 - "WebSocket /v1/realtime" [accepted]
+INFO:     connection open
+2026-10-30 19:42:40,235 - [pipeline 0] speech_to_speech.api.openai_realtime.websocket_router - INFO - Client connected to pipeline 0 (session session_b633b0a0a8344631a30706d97bcac58c)
+2026-10-30 19:42:40,293 - [pipeline 0] speech_to_speech.api.openai_realtime.handlers.session - INFO - Session configuration updated
+2026-10-30 19:42:41,033 - [pipeline 0] speech_to_speech.VAD.vad_handler - INFO - Speech started (confirmed, active=384ms, min=384ms, segment=416ms, turn=turn_1 rev=0)
+
+USER: 帮我查一
+
+USER: 帮我查一下啊
+2026-10-30 19:42:41,805 - [pipeline 0] speech_to_speech.VAD.vad_handler - INFO - Speech soft-ended (segment=1152ms, active=960ms, turn=turn_1 rev=0)
+
+USER: 帮我查一下啊
+2026-10-30 19:42:41,863 - [pipeline 0] speech_to_speech.STT.transcription_notifier - INFO - Transcription completed: 帮我查一下啊
+2026-10-30 19:42:41,911 - [pipeline 0] speech_to_speech.VAD.vad_handler - INFO - VAD: pending reopen candidate for speculative turn turn_1 revision 1
+2026-10-30 19:42:42,015 - [pipeline 0] httpx - INFO - HTTP Request: POST https://api.deepseek.com/v1/responses "HTTP/1.1 200 OK"
+2026-10-30 19:42:42,130 - [pipeline 0] speech_to_speech.VAD.vad_handler - INFO - VAD: reopened speculative turn turn_1 revision 1
+2026-10-30 19:42:42,131 - [pipeline 0] speech_to_speech.VAD.vad_handler - INFO - Speech started (confirmed, active=192ms, min=192ms, segment=192ms, turn=turn_1 rev=1)
+
+
+USER: 帮我查一下啊明天
+2026-10-30 19:42:42,652 - [pipeline 0] speech_to_speech.LLM.responses_api_language_model - INFO - LLM generation cancelled (interruption)
+
+USER: 帮我查一下啊明天我该做
+
+USER: 帮我查一下明天我该做点什么
+2026-10-30 19:42:43,338 - [pipeline 0] speech_to_speech.VAD.vad_handler - INFO - Speech soft-ended (segment=1408ms, active=1216ms, turn=turn_1 rev=1)
+
+USER: 帮我查一下啊明天我该做点什么
+2026-10-30 19:42:43,401 - [pipeline 0] speech_to_speech.STT.transcription_notifier - INFO - Transcription completed: 帮我查一下啊明天我该做点什么
+2026-10-30 19:42:43,520 - [pipeline 0] httpx - INFO - HTTP Request: POST https://api.deepseek.com/v1/responses "HTTP/1.1 200 OK"
+2026-10-30 19:42:44,339 - [pipeline 0] speech_to_speech.baseHandler - INFO - ResponsesApiModelHandler: 0.937 s
+2026-10-30 19:42:44,339 - [pipeline 0] speech_to_speech.LLM.lm_output_processor - INFO - Sending to clients: text='', tools=['spawn_thinking']
+2026-10-30 19:42:44,347 - [pipeline 0] speech_to_speech.api.openai_realtime.websocket_router - INFO - Pipeline 0: delivering 1 tool call(s) despite discarding=True (turn=turn_1 rev=1)
+2026-10-30 19:42:44,347 - [pipeline 0] speech_to_speech.api.openai_realtime.handlers.response - INFO - voice-ayuan tool-delivery: delivering tool call(s) ['spawn_thinking'] turn=turn_1 rev=1 (commit_result=True)
+2026-10-30 19:42:44,348 - [pipeline 0] speech_to_speech.api.openai_realtime.service - INFO - Token usage (response): input=2889, output=47
+2026-10-30 19:42:44,348 - [pipeline 0] speech_to_speech.api.openai_realtime.handlers.response - INFO - Response done (status=completed) — this response: input_tokens=2889, output_tokens=47, audio=2.56s | cumulative: input_tokens=11556, output_tokens=186, audio=10.24s
+2026-10-30 19:42:44,349 - [pipeline 0] speech_to_speech.api.openai_realtime.websocket_router - INFO - Pipeline 0: response complete, listening re-enabled
+2026-10-30 19:42:46,758 - [pipeline 0] speech_to_speech.api.openai_realtime.websocket_router - INFO - Client session_b633b0a0a8344631a30706d97bcac58c disconnected from pipeline 0
+2026-10-30 19:42:46,809 - [pipeline 0] speech_to_speech.api.openai_realtime.service - INFO - Session session_b633b0a0a8344631a30706d97bcac58c unregistered — cumulative: input_tokens=11556, output_tokens=186, audio=10.24s
+2026-10-30 19:42:46,809 - [pipeline 0] speech_to_speech.api.openai_realtime.websocket_router - INFO - Pipeline 0 released (session session_b633b0a0a8344631a30706d97bcac58c ended)
+INFO:     127.0.0.1:45548 - "WebSocket /v1/realtime" [accepted]
+INFO:     connection open
+2026-10-30 19:42:47,550 - [pipeline 0] speech_to_speech.api.openai_realtime.websocket_router - INFO - Client connected to pipeline 0 (session session_67f8c7707c6f404ca679884afd4ac8e6)
+2026-10-30 19:42:47,621 - [pipeline 0] speech_to_speech.api.openai_realtime.handlers.session - INFO - Session configuration updated
+2026-10-30 19:42:48,365 - [pipeline 0] speech_to_speech.VAD.vad_handler - INFO - Speech started (confirmed, active=384ms, min=384ms, segment=416ms, turn=turn_1 rev=0)
+
+USER: 帮我查一
+
+USER: 帮我查一下啊
+2026-10-30 19:42:49,129 - [pipeline 0] speech_to_speech.VAD.vad_handler - INFO - Speech soft-ended (segment=1152ms, active=960ms, turn=turn_1 rev=0)
+
+USER: 帮我查一下啊
+2026-10-30 19:42:49,182 - [pipeline 0] speech_to_speech.STT.transcription_notifier - INFO - Transcription completed: 帮我查一下啊
+2026-10-30 19:42:49,239 - [pipeline 0] speech_to_speech.VAD.vad_handler - INFO - VAD: pending reopen candidate for speculative turn turn_1 revision 1
+2026-10-30 19:42:49,292 - [pipeline 0] httpx - INFO - HTTP Request: POST https://api.deepseek.com/v1/responses "HTTP/1.1 200 OK"
+2026-10-30 19:42:49,459 - [pipeline 0] speech_to_speech.VAD.vad_handler - INFO - VAD: reopened speculative turn turn_1 revision 1
+2026-10-30 19:42:49,460 - [pipeline 0] speech_to_speech.VAD.vad_handler - INFO - Speech started (confirmed, active=192ms, min=192ms, segment=192ms, turn=turn_1 rev=1)
+
+
+USER: 帮我查一下啊明天
+2026-10-30 19:42:49,728 - [pipeline 0] speech_to_speech.LLM.responses_api_language_model - INFO - LLM generation cancelled (interruption)
+
+USER: 帮我查一下啊明天我该做
+
+USER: 帮我查一下明天我该做点什么
+2026-10-30 19:42:50,661 - [pipeline 0] speech_to_speech.VAD.vad_handler - INFO - Speech soft-ended (segment=1408ms, active=1216ms, turn=turn_1 rev=1)
+
+USER: 帮我查一下啊明天我该做点什么
+2026-10-30 19:42:50,725 - [pipeline 0] speech_to_speech.STT.transcription_notifier - INFO - Transcription completed: 帮我查一下啊明天我该做点什么
+2026-10-30 19:42:50,904 - [pipeline 0] httpx - INFO - HTTP Request: POST https://api.deepseek.com/v1/responses "HTTP/1.1 200 OK"
+2026-10-30 19:42:51,772 - [pipeline 0] speech_to_speech.baseHandler - INFO - ResponsesApiModelHandler: 1.044 s
+2026-10-30 19:42:51,773 - [pipeline 0] speech_to_speech.LLM.lm_output_processor - INFO - Sending to clients: text='', tools=['spawn_thinking']
+2026-10-30 19:42:51,773 - [pipeline 0] speech_to_speech.api.openai_realtime.websocket_router - INFO - Pipeline 0: delivering 1 tool call(s) despite discarding=True (turn=turn_1 rev=1)
+2026-10-30 19:42:51,773 - [pipeline 0] speech_to_speech.api.openai_realtime.handlers.response - INFO - voice-ayuan tool-delivery: delivering tool call(s) ['spawn_thinking'] turn=turn_1 rev=1 (commit_result=True)
+2026-10-30 19:42:51,776 - [pipeline 0] speech_to_speech.api.openai_realtime.service - INFO - Token usage (response): input=2889, output=46
+2026-10-30 19:42:51,776 - [pipeline 0] speech_to_speech.api.openai_realtime.handlers.response - INFO - Response done (status=completed) — this response: input_tokens=2889, output_tokens=46, audio=2.56s | cumulative: input_tokens=14445, output_tokens=232, audio=12.80s
+2026-10-30 19:42:51,777 - [pipeline 0] speech_to_speech.api.openai_realtime.websocket_router - INFO - Pipeline 0: response complete, listening re-enabled

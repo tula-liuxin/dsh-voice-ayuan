@@ -1,0 +1,88 @@
+{
+  "run": 1,
+  "withBargein": false,
+  "url": "ws://127.0.0.1:18765/v1/realtime",
+  "promptFile": "C:\\Users\\23677\\Desktop\\dsh-plugins\\voice-ayuan\\deploy\\repro\\fixtures\\PROMPT-old.md",
+  "injectedBargein": false,
+  "speechStarts": 2,
+  "toolCalls": [],
+  "responseDone": [
+    {
+      "at": "6.861",
+      "status": "completed",
+      "responseId": "resp_e7a87a360d3f4440b02ce8c6ae6df469"
+    }
+  ],
+  "assistantTranscripts": [],
+  "audioDeltas": 70,
+  "audioSeconds": 11.39,
+  "errors": [],
+  "eventOrder": [
+    "response.created",
+    "response.done"
+  ],
+  "functionCallReceived": false,
+  "functionCallBeforeResponseDone": false,
+  "timeline": [
+    {
+      "at": 0.888,
+      "type": "input_audio_buffer.speech_started",
+      "responseId": "",
+      "status": "",
+      "callId": "",
+      "name": "",
+      "transcript": "",
+      "itemType": ""
+    },
+    {
+      "at": 1.677,
+      "type": "input_audio_buffer.speech_stopped",
+      "responseId": "",
+      "status": "",
+      "callId": "",
+      "name": "",
+      "transcript": "",
+      "itemType": ""
+    },
+    {
+      "at": 1.98,
+      "type": "input_audio_buffer.speech_started",
+      "responseId": "",
+      "status": "",
+      "callId": "",
+      "name": "",
+      "transcript": "",
+      "itemType": ""
+    },
+    {
+      "at": 3.202,
+      "type": "input_audio_buffer.speech_stopped",
+      "responseId": "",
+      "status": "",
+      "callId": "",
+      "name": "",
+      "transcript": "",
+      "itemType": ""
+    },
+    {
+      "at": 4.401,
+      "type": "response.created",
+      "responseId": "resp_e7a87a360d3f4440b02ce8c6ae6df469",
+      "status": "in_progress",
+      "callId": "",
+      "name": "",
+      "transcript": "",
+      "itemType": ""
+    },
+    {
+      "at": 6.862,
+      "type": "response.done",
+      "responseId": "resp_e7a87a360d3f4440b02ce8c6ae6df469",
+      "status": "completed",
+      "callId": "",
+      "name": "",
+      "transcript": "",
+      "itemType": ""
+    }
+  ]
+}

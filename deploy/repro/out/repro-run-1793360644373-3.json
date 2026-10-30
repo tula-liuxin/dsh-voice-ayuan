@@ -1,0 +1,96 @@
+{
+  "run": 3,
+  "withBargein": false,
+  "url": "ws://127.0.0.1:18765/v1/realtime",
+  "promptFile": "C:\\Users\\23677\\Desktop\\dsh-plugins\\voice-ayuan\\prompt\\PROMPT.md",
+  "injectedBargein": false,
+  "speechStarts": 2,
+  "toolCalls": [
+    {
+      "name": "spawn_thinking",
+      "callId": "call_362bef15c92a451ba05048ddbd3ca54d",
+      "at": "18.843",
+      "responseId": "resp_286d795a3029417ea7693a16bdd64c1d"
+    }
+  ],
+  "responseDone": [
+    {
+      "at": "18.843",
+      "status": "completed",
+      "responseId": "resp_286d795a3029417ea7693a16bdd64c1d"
+    }
+  ],
+  "assistantTranscripts": [],
+  "audioDeltas": 0,
+  "audioSeconds": 0,
+  "errors": [],
+  "eventOrder": [
+    "tool_call",
+    "response.done"
+  ],
+  "functionCallReceived": true,
+  "functionCallBeforeResponseDone": true,
+  "toolCallToResponseDoneMs": 0.449,
+  "timeline": [
+    {
+      "at": 15.5252774,
+      "type": "input_audio_buffer.speech_started",
+      "responseId": "",
+      "status": "",
+      "callId": "",
+      "name": "",
+      "transcript": "",
+      "itemType": ""
+    },
+    {
+      "at": 16.2825701,
+      "type": "input_audio_buffer.speech_stopped",
+      "responseId": "",
+      "status": "",
+      "callId": "",
+      "name": "",
+      "transcript": "",
+      "itemType": ""
+    },
+    {
+      "at": 16.6166895,
+      "type": "input_audio_buffer.speech_started",
+      "responseId": "",
+      "status": "",
+      "callId": "",
+      "name": "",
+      "transcript": "",
+      "itemType": ""
+    },
+    {
+      "at": 17.8229951,
+      "type": "input_audio_buffer.speech_stopped",
+      "responseId": "",
+      "status": "",
+      "callId": "",
+      "name": "",
+      "transcript": "",
+      "itemType": ""
+    },
+    {
+      "at": 18.8425809,
+      "type": "response.function_call_arguments.done",
+      "responseId": "resp_286d795a3029417ea7693a16bdd64c1d",
+      "status": "",
+      "callId": "call_362bef15c92a451ba05048ddbd3ca54d",
+      "name": "spawn_thinking",
+      "transcript": "",
+      "itemType": ""
+    },
+    {
+      "at": 18.843049200000003,
+      "type": "response.done",
+      "responseId": "resp_286d795a3029417ea7693a16bdd64c1d",
+      "status": "completed",
+      "callId": "",
+      "name": "",
+      "transcript": "",
+      "itemType": ""
+    }
+  ]
+}

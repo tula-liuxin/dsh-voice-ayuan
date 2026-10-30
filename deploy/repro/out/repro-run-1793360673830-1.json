@@ -1,0 +1,113 @@
+{
+  "run": 1,
+  "withBargein": false,
+  "url": "ws://127.0.0.1:18765/v1/realtime",
+  "promptFile": "C:\\Users\\23677\\Desktop\\dsh-plugins\\voice-ayuan\\prompt\\PROMPT.md",
+  "injectedBargein": false,
+  "speechStarts": 2,
+  "toolCalls": [
+    {
+      "name": "get_current_time",
+      "callId": "call_f30dafd77ed648dabfaedae5123ffa38",
+      "at": "4.208",
+      "responseId": "resp_77bb545b84d54501b6db6f7d71808759"
+    },
+    {
+      "name": "get_agent_task_status",
+      "callId": "call_7b019f646f2e426da63377506295e8b2",
+      "at": "4.208",
+      "responseId": "resp_77bb545b84d54501b6db6f7d71808759"
+    }
+  ],
+  "responseDone": [
+    {
+      "at": "5.048",
+      "status": "completed",
+      "responseId": "resp_77bb545b84d54501b6db6f7d71808759"
+    }
+  ],
+  "assistantTranscripts": [],
+  "audioDeltas": 19,
+  "audioSeconds": 3.23,
+  "errors": [],
+  "eventOrder": [
+    "tool_call",
+    "tool_call",
+    "response.done"
+  ],
+  "functionCallReceived": true,
+  "functionCallBeforeResponseDone": true,
+  "toolCallToResponseDoneMs": 840.172,
+  "timeline": [
+    {
+      "at": 0.8863937,
+      "type": "input_audio_buffer.speech_started",
+      "responseId": "",
+      "status": "",
+      "callId": "",
+      "name": "",
+      "transcript": "",
+      "itemType": ""
+    },
+    {
+      "at": 1.6560934999999999,
+      "type": "input_audio_buffer.speech_stopped",
+      "responseId": "",
+      "status": "",
+      "callId": "",
+      "name": "",
+      "transcript": "",
+      "itemType": ""
+    },
+    {
+      "at": 1.9781894,
+      "type": "input_audio_buffer.speech_started",
+      "responseId": "",
+      "status": "",
+      "callId": "",
+      "name": "",
+      "transcript": "",
+      "itemType": ""
+    },
+    {
+      "at": 3.1740672,
+      "type": "input_audio_buffer.speech_stopped",
+      "responseId": "",
+      "status": "",
+      "callId": "",
+      "name": "",
+      "transcript": "",
+      "itemType": ""
+    },
+    {
+      "at": 4.207813,
+      "type": "response.function_call_arguments.done",
+      "responseId": "resp_77bb545b84d54501b6db6f7d71808759",
+      "status": "",
+      "callId": "call_f30dafd77ed648dabfaedae5123ffa38",
+      "name": "get_current_time",
+      "transcript": "",
+      "itemType": ""
+    },
+    {
+      "at": 4.2079709,
+      "type": "response.function_call_arguments.done",
+      "responseId": "resp_77bb545b84d54501b6db6f7d71808759",
+      "status": "",
+      "callId": "call_7b019f646f2e426da63377506295e8b2",
+      "name": "get_agent_task_status",
+      "transcript": "",
+      "itemType": ""
+    },
+    {
+      "at": 5.0479811,
+      "type": "response.done",
+      "responseId": "resp_77bb545b84d54501b6db6f7d71808759",
+      "status": "completed",
+      "callId": "",
+      "name": "",
+      "transcript": "",
+      "itemType": ""
+    }
+  ]
+}

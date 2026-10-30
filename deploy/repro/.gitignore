@@ -1,0 +1,2 @@
+# Generated audio fixtures are rebuilt by `node deploy/repro/repro-tool-drop.mjs gen`
+*.wav

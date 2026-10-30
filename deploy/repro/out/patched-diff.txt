@@ -1,0 +1,220 @@
+--- handlers/response.py.bak-voice-toolfix	2026-10-29 21:04:59.353526278 +0800
++++ handlers/response.py	2026-10-30 19:41:22.382611043 +0800
+@@ -230,23 +230,44 @@
+         wait_for_pending_reopen: bool = True,
+     ) -> list[ServerEvent] | None:
+         """Handle assistant_text: emit transcript and/or tool-call events."""
++        # voice-ayuan patch:tool-delivery -- a tool-bearing AssistantTextEvent is
++        # terminal client-visible output. It must never wait for a speculative
++        # reopen grace and must be delivered even when the turn is considered
++        # stale; only a duplicate call_id may be suppressed (logged at INFO).
+         if self._service.speculative_turns:
+-            commit_result: bool | None
+-            if wait_for_pending_reopen:
+-                commit_result = self._service.speculative_turns.commit_if_latest_after_reopen_grace(
++            if event.tools:
++                commit_result = self._service.speculative_turns.try_commit_if_latest_after_reopen_grace(
+                     event.turn_id,
+                     event.turn_revision,
+                 )
+-            else:
+-                commit_result = self._service.speculative_turns.try_commit_if_latest_after_reopen_grace(
++                logger.info(
++                    "voice-ayuan tool-delivery: delivering tool call(s) %s turn=%s rev=%s (commit_result=%s)",
++                    [getattr(tool, "name", "?") for tool in event.tools],
+                     event.turn_id,
+                     event.turn_revision,
++                    commit_result,
+                 )
+-            if commit_result is None:
+-                return None
+-            if not commit_result:
+-                logger.debug("Dropping stale assistant text for turn=%s rev=%s", event.turn_id, event.turn_revision)
+-                return []
++            else:
++                commit_result: bool | None
++                if wait_for_pending_reopen:
++                    commit_result = self._service.speculative_turns.commit_if_latest_after_reopen_grace(
++                        event.turn_id,
++                        event.turn_revision,
++                    )
++                else:
++                    commit_result = self._service.speculative_turns.try_commit_if_latest_after_reopen_grace(
++                        event.turn_id,
++                        event.turn_revision,
++                    )
++                if commit_result is None:
++                    return None
++                if not commit_result:
++                    logger.info(
++                        "voice-ayuan tool-delivery: dropping stale assistant text without tools turn=%s rev=%s",
++                        event.turn_id,
++                        event.turn_revision,
++                    )
++                    return []
+         st = self._state(conn_id)
+         events: list[ServerEvent] = []
+         resp_id, item_id = self._ensure_response(conn_id)
+@@ -266,8 +287,23 @@
+             )
+             output_idx += 1
+         if event.tools:
+-            st.response_usage.tool_calls += len(event.tools)
++            # voice-ayuan patch:tool-delivery -- duplicate call_id is the only
++            # case where a tool call may be suppressed, and it is logged.
++            delivered_tools = []
+             for tool in event.tools:
++                call_id = getattr(tool, "call_id", None)
++                if call_id and call_id in st.emitted_tool_call_ids:
++                    logger.info(
++                        "voice-ayuan tool-delivery: suppressing duplicate function_call call_id=%s name=%s",
++                        call_id,
++                        getattr(tool, "name", "?"),
++                    )
++                    continue
++                if call_id:
++                    st.emitted_tool_call_ids.add(call_id)
++                delivered_tools.append(tool)
++            st.response_usage.tool_calls += len(delivered_tools)
++            for tool in delivered_tools:
+                 events.append(
+                     ResponseFunctionCallArgumentsDoneEvent(
+                         type="response.function_call_arguments.done",
+--- service.py.bak-voice-toolfix	2026-10-29 21:04:59.352526277 +0800
++++ service.py	2026-10-30 19:41:22.386611085 +0800
+@@ -168,6 +168,8 @@
+     speculative_user_item_id: Optional[str] = None
+     speculative_input_item_id: Optional[str] = None
+     speculative_audio_duration_s: float = 0.0
++    # voice-ayuan patch:tool-delivery -- tool call_ids already emitted to the client
++    emitted_tool_call_ids: set[str] = Field(default_factory=set)
+ 
+ 
+ class RealtimeService:
+@@ -323,6 +325,26 @@
+         *,
+         wait_for_pending_reopen: bool,
+     ) -> list[ServerEvent] | None:
++        # voice-ayuan patch:tool-delivery -- a tool-bearing AssistantTextEvent is
++        # terminal client-visible output: bypass the speculative reopen wait and
++        # the staleness verdict entirely, deliver immediately, and log it.
++        if isinstance(event, AssistantTextEvent) and event.tools:
++            stale = self._is_stale_turn_event(event, wait_for_pending_reopen=False)
++            if stale is not False:
++                logger.info(
++                    "voice-ayuan tool-delivery: delivering tool call(s) %s for turn=%s rev=%s "
++                    "despite stale=%s (non-blocking check)",
++                    [getattr(tool, "name", "?") for tool in event.tools],
++                    event.turn_id,
++                    event.turn_revision,
++                    stale,
++                )
++            self._observe_turn_event(event)
++            return self.response.on_assistant_text(
++                conn_id,
++                event,
++                wait_for_pending_reopen=False,
++            )
+         is_stale = self._is_stale_turn_event(event, wait_for_pending_reopen=wait_for_pending_reopen)
+         if is_stale is None:
+             return None
+--- websocket_router.py.bak-voice-toolfix	2026-10-29 21:04:59.352526277 +0800
++++ websocket_router.py	2026-10-30 19:41:22.390611127 +0800
+@@ -83,6 +83,17 @@
+     )
+ 
+ 
++def _is_tool_bearing_assistant_text(item: Any) -> bool:
++    # voice-ayuan patch:tool-delivery -- tool-bearing assistant text must never be
++    # silently flushed or discarded.
++    return isinstance(item, AssistantTextEvent) and bool(getattr(item, "tools", None))
++
++
++def _keep_user_text_or_tool_event(item: Any) -> bool:
++    # voice-ayuan patch:tool-delivery -- tool calls survive interrupt flushes.
++    return _keep_user_text_event(item) or _is_tool_bearing_assistant_text(item)
++
++
+ def _audio_payload(item: Any) -> Any:
+     return item.audio if isinstance(item, AudioOutput) else item
+ 
+@@ -137,9 +148,30 @@
+             if isinstance(item, TokenUsageEvent):
+                 unit.service.dispatch_pipeline_event(session_id, item)
+                 drained_usage += 1
++            elif _is_tool_bearing_assistant_text(item):
++                # voice-ayuan patch:tool-delivery -- deliver tool calls before
++                # response.done even when discarding and past a text boundary.
++                drained_assistant += 1
++                logger.info(
++                    "Pipeline %d: delivering %d tool call(s) during response drain (discarding=%s, turn=%s rev=%s)",
++                    unit.index,
++                    len(item.tools),
++                    unit.cancel_scope.discarding,
++                    item.turn_id,
++                    item.turn_revision,
++                )
++                events = unit.service.dispatch_pipeline_event(session_id, item)
++                if ws is not None and events:
++                    await _send_events(ws, events)
+             elif drain_assistant_events and isinstance(item, AssistantTextEvent):
+                 drained_assistant += 1
+                 if unit.cancel_scope.discarding:
++                    logger.info(
++                        "Pipeline %d: dropping assistant text during response drain (discarding=True, no tools, turn=%s rev=%s)",
++                        unit.index,
++                        item.turn_id,
++                        item.turn_revision,
++                    )
+                     continue
+                 events = unit.service.dispatch_pipeline_event(session_id, item)
+                 if ws is not None and events:
+@@ -359,7 +391,7 @@
+                     if was_active:
+                         unit.cancel_scope.cancel()
+                     _flush_queue(unit.output_queue, preserve=_keep_audio_sentinel)
+-                    _flush_queue(unit.text_output_queue, preserve=_keep_user_text_event)
++                    _flush_queue(unit.text_output_queue, preserve=_keep_user_text_or_tool_event)
+                     events = unit.service.handle_response_cancel(session_id)
+                     if events:
+                         await _send_events(ws, events)
+@@ -462,9 +494,28 @@
+                         was_in_response = st.in_response
+                         was_response_pending = st.response_pending
+ 
+-                    if unit.cancel_scope.discarding and isinstance(text_msg, AssistantTextEvent):
+-                        pass
++                    if (
++                        unit.cancel_scope.discarding
++                        and isinstance(text_msg, AssistantTextEvent)
++                        and not _is_tool_bearing_assistant_text(text_msg)
++                    ):
++                        # voice-ayuan patch:tool-delivery -- never silent: log the drop.
++                        logger.info(
++                            "Pipeline %d: dropping assistant text while discarding (no tools, turn=%s rev=%s)",
++                            unit.index,
++                            text_msg.turn_id,
++                            text_msg.turn_revision,
++                        )
+                     elif ws is not None and isinstance(text_msg, PipelineEvent) and session_id:
++                        if _is_tool_bearing_assistant_text(text_msg):
++                            logger.info(
++                                "Pipeline %d: delivering %d tool call(s)%s (turn=%s rev=%s)",
++                                unit.index,
++                                len(text_msg.tools),
++                                " despite discarding=True" if unit.cancel_scope.discarding else "",
++                                text_msg.turn_id,
++                                text_msg.turn_revision,
++                            )
+                         events = unit.service.dispatch_pipeline_event(session_id, text_msg)
+                         if events:
+                             await _send_events(ws, events)
+@@ -478,7 +529,7 @@
+                             if session_id:
+                                 unit.service._state(session_id).response_pending = False
+                             _flush_queue(unit.output_queue, preserve=_keep_audio_sentinel)
+-                            _flush_queue(unit.text_output_queue, preserve=_keep_user_text_event)
++                            _flush_queue(unit.text_output_queue, preserve=_keep_user_text_or_tool_event)
+                             if unit.response_playing.is_set():
+                                 unit.response_playing.clear()
+                             logger.info(

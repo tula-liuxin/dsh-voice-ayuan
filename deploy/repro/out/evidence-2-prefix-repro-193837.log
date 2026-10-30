@@ -1,0 +1,34 @@
+INFO:     127.0.0.1:56290 - "WebSocket /v1/realtime" [accepted]
+INFO:     connection open
+2026-10-30 19:38:33,561 - [pipeline 0] speech_to_speech.api.openai_realtime.websocket_router - INFO - Client connected to pipeline 0 (session session_7b2067e3cf1c4692ba41a172d34a64c3)
+2026-10-30 19:38:33,622 - [pipeline 0] speech_to_speech.api.openai_realtime.handlers.session - INFO - Session configuration updated
+2026-10-30 19:38:34,374 - [pipeline 0] speech_to_speech.VAD.vad_handler - INFO - Speech started (confirmed, active=384ms, min=384ms, segment=416ms, turn=turn_1 rev=0)
+
+USER: 帮我查一
+
+USER: 帮我查一下啊
+2026-10-30 19:38:35,148 - [pipeline 0] speech_to_speech.VAD.vad_handler - INFO - Speech soft-ended (segment=1152ms, active=960ms, turn=turn_1 rev=0)
+
+USER: 帮我查一下啊
+2026-10-30 19:38:35,201 - [pipeline 0] speech_to_speech.STT.transcription_notifier - INFO - Transcription completed: 帮我查一下啊
+2026-10-30 19:38:35,257 - [pipeline 0] speech_to_speech.VAD.vad_handler - INFO - VAD: pending reopen candidate for speculative turn turn_1 revision 1
+2026-10-30 19:38:35,337 - [pipeline 0] httpx - INFO - HTTP Request: POST https://api.deepseek.com/v1/responses "HTTP/1.1 200 OK"
+2026-10-30 19:38:35,477 - [pipeline 0] speech_to_speech.VAD.vad_handler - INFO - VAD: reopened speculative turn turn_1 revision 1
+2026-10-30 19:38:35,477 - [pipeline 0] speech_to_speech.VAD.vad_handler - INFO - Speech started (confirmed, active=192ms, min=192ms, segment=192ms, turn=turn_1 rev=1)
+
+
+USER: 帮我查一下啊明天
+2026-10-30 19:38:35,645 - [pipeline 0] speech_to_speech.LLM.responses_api_language_model - INFO - LLM generation cancelled (interruption)
+
+USER: 帮我查一下啊明天我该做
+
+USER: 帮我查一下明天我该做点什么
+2026-10-30 19:38:36,691 - [pipeline 0] speech_to_speech.VAD.vad_handler - INFO - Speech soft-ended (segment=1408ms, active=1216ms, turn=turn_1 rev=1)
+
+USER: 帮我查一下啊明天我该做点什么
+2026-10-30 19:38:36,757 - [pipeline 0] speech_to_speech.STT.transcription_notifier - INFO - Transcription completed: 帮我查一下啊明天我该做点什么
+2026-10-30 19:38:36,888 - [pipeline 0] httpx - INFO - HTTP Request: POST https://api.deepseek.com/v1/responses "HTTP/1.1 200 OK"
+2026-10-30 19:38:37,691 - [pipeline 0] speech_to_speech.baseHandler - INFO - ResponsesApiModelHandler: 0.929 s
+2026-10-30 19:38:37,692 - [pipeline 0] speech_to_speech.LLM.lm_output_processor - INFO - Sending to clients: text='', tools=['spawn_thinking']
+2026-10-30 19:38:37,697 - [pipeline 0] speech_to_speech.api.openai_realtime.service - INFO - Token usage (response): input=2889, output=46
+2026-10-30 19:38:37,698 - [pipeline 0] speech_to_speech.api.openai_realtime.websocket_router - INFO - Pipeline 0: response complete, listening re-enabled
