@@ -260,8 +260,10 @@ export function computePhoneSpot({ anchor = null, view, size = DEFAULT_BALL, gap
     const left = clampXIn(rawLeft, view, sizeNow)
     return { left, top: anchor.y, mode: 'dock-horizontal', side: 'left', dock, clamped: Math.abs(left - rawLeft) > 0.01 }
   }
-  const leftSlot = anchor.x - 2 * step
-  const rightSlot = anchor.x + anchorWidth + gap + step
+  // 闪电落在锚点左侧时（与 expectedLightningRect 同一判定），电话贴锚点右侧即可，不再预留一格
+  const lightningOnLeft = anchor.x - gap - sizeNow >= pad
+  const leftSlot = lightningOnLeft ? anchor.x - 2 * step : anchor.x - gap - sizeNow
+  const rightSlot = lightningOnLeft ? anchor.x + anchorWidth + gap : anchor.x + anchorWidth + gap + step
   const useRight = leftSlot < pad
   const rawLeft = useRight ? rightSlot : leftSlot
   const rawTop = anchor.y + (anchorHeight - sizeNow) / 2
@@ -535,9 +537,11 @@ export function computeMetrics({
     if (!lightningBox || !phone) return null
     if (mode === 'dock-vertical') return round2(phone.top <= lightningBox.top ? lightningBox.top - phone.bottom : phone.top - lightningBox.bottom)
     if (mode === 'dock-horizontal') return round2(phone.left <= lightningBox.left ? lightningBox.left - phone.right : phone.left - lightningBox.right)
-    const leftGap = round2(lightningBox.left - phone.right)
-    const rightGap = round2(phone.left - lightningBox.right)
-    return Math.abs(leftGap) <= Math.abs(rightGap) ? leftGap : rightGap
+    const candidates = [round2(lightningBox.left - phone.right), round2(phone.left - lightningBox.right)]
+    if (bubbleVisible && bubbleRect) {
+      candidates.push(round2(bubbleRect.left - phone.right), round2(phone.left - bubbleRect.right))
+    }
+    return candidates.reduce((best, cur) => (Math.abs(cur) < Math.abs(best) ? cur : best))
   })()
   // Lead 契约里的台阶：dock 竖排 |phone.top - lightning.top| = step；dock 横排 |phone.left - lightning.left| = step。
   const lightningStep = (() => {
@@ -770,17 +774,21 @@ export function createLauncher({ React, h }) {
       let last = null
       const tick = () => {
         if (stopped) return
-        const next = readNeighbors(document, window)
-        if (!last || !sameRowState(next, last)) {
-          last = next
-          setRow(next)
+        const now = Date.now()
+        if (document.visibilityState !== 'hidden' && now - (tick.at || 0) >= 83) {
+          tick.at = now
+          const next = readNeighbors(document, window)
+          if (!last || !sameRowState(next, last)) {
+            last = next
+            setRow(next)
+          }
         }
         raf = requestAnimationFrame(tick)
       }
       tick()
       // rAF 在个别 Electron 场景会停摆/被节流（实机「渲染快照过期、位置掉到兜底角」的教训），
       // 再加一层 200ms 定时器，保证邻居位置变化总能进入渲染。
-      const interval = setInterval(tick, 200)
+      const interval = setInterval(tick, 1000)
       return () => { stopped = true; cancelAnimationFrame(raf); clearInterval(interval) }
     }, [])
     return [row, refresh]
