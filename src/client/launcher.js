@@ -26,6 +26,10 @@ const PANEL_Z = 120
 const BUTTON_Z = 121
 const REPORT_URL = '/voice-ayuan/report'
 const BUBBLE_KEY = 'ayuan.bubble-position.v2'
+// 拖动期间冻结面板重排：手指按住时的几何抖动不应触发每帧重新选位（手机端闪烁/难点按的另一来源）。
+let launcherDragging = false
+// 面板重排的最小间隔（ms）。按帧重排会在手机低帧率下变成持续闪动。
+const PLACE_MIN_INTERVAL_MS = 120
 const PHONE_PATH = 'M4 5.5C4 4.7 4.7 4 5.5 4h2.2c.7 0 1.3.5 1.5 1.2l.7 2.6c.1.6-.1 1.2-.6 1.5l-1.3.8a12 12 0 0 0 5.6 5.6l.8-1.3c.3-.5.9-.7 1.5-.6l2.6.7c.7.2 1.2.8 1.2 1.5v2.2c0 .8-.7 1.5-1.5 1.5C10.6 19.7 4.3 13.4 4 5.5Z'
 
 const CSS = [
@@ -154,11 +158,11 @@ export function readNeighbors(doc, win) {
   return { ball, bubble, sameRow, gap, view, fallback, ballEl, bubbleEl }
 }
 
-function sameRect(a, b) {
+function sameRect(a, b, tolerance = 1) {
   if (a === b) return true
   if (!a || !b) return false
-  return Math.abs(a.left - b.left) <= 0.25 && Math.abs(a.top - b.top) <= 0.25 &&
-    Math.abs(a.width - b.width) <= 0.25 && Math.abs(a.height - b.height) <= 0.25
+  return Math.abs(a.left - b.left) <= tolerance && Math.abs(a.top - b.top) <= tolerance &&
+    Math.abs(a.width - b.width) <= tolerance && Math.abs(a.height - b.height) <= tolerance
 }
 
 export function sameRowState(a, b) {
@@ -405,7 +409,7 @@ export function reduceTranscript(state, event) {
 // ---------------------------------------------------------------------------
 // 面板避让算法（可单测）：优先按钮排上方、右缘对齐鲸鱼右缘；被阿源浮层/闪电菜单挡住就换位。
 // ---------------------------------------------------------------------------
-export function placePanel({ row = null, view, width = PANEL_MAX_WIDTH, height = 280, avoidRects = [], rowRects = [] }) {
+export function placePanel({ row = null, view, width = PANEL_MAX_WIDTH, height = 280, avoidRects = [], rowRects = [], preferredMode = null }) {
   const margin = PANEL_MARGIN
   const gap = PANEL_GAP
   const panelWidth = Math.max(220, Math.min(width, view.width - margin * 2))
@@ -450,7 +454,8 @@ export function placePanel({ row = null, view, width = PANEL_MAX_WIDTH, height =
     let overlap = 0
     for (const blocker of blockers) overlap += intersectArea(rect, blocker)
     const crampedAbove = aboveMaxH < 160 && String(c.mode).indexOf('above') === 0
-    const score = overlap * 1000 + (modeCost[c.mode] ?? 9) + (crampedAbove ? 8 : 0) + (Math.abs(left - (right - panelWidth)) <= 0.5 ? 0 : 0.4)
+    // preferredMode：输入没变时沿用上一次的候选模式，避免 above/below 在临界分数上来回跳（手机端闪烁根因之一）。
+    const score = overlap * 1000 + (modeCost[c.mode] ?? 9) + (crampedAbove ? 8 : 0) + (Math.abs(left - (right - panelWidth)) <= 0.5 ? 0 : 0.4) - (c.mode === preferredMode ? 1.4 : 0)
     if (!best || score < best.score) {
       best = Object.assign({}, c, rect, { score, maxHeight: Math.max(80, Math.min(c.maxHeight, view.height - margin * 2)) })
     }
@@ -808,6 +813,8 @@ export function createLauncher({ React, h }) {
     const rowRef = useRef(row)
     const bubbleVisibleRef = useRef(bubbleVisible)
     const placeRef = useRef(null)
+    const lastPlaceSigRef = useRef('')
+    const lastPlaceModeRef = useRef(null)
     rowRef.current = row
     bubbleVisibleRef.current = bubbleVisible
 
@@ -843,11 +850,24 @@ export function createLauncher({ React, h }) {
       const avoid = readAvoidRects(document, window)
       const phoneRect = rectFromElement(document.querySelector('.va-phone'))
       const rowRects = [rowNow.ball, rowNow.bubble, phoneRect, anchorRect].filter(Boolean)
-      const height = el.getBoundingClientRect().height || 280
+      // 用 scrollHeight（内容固有高度）而不是当前渲染高度：当前高度被上一轮的 maxHeight 钳过，
+      // 回喂给 placePanel 会让候选位置在 above/below 之间自激振荡（手机端「疯狂闪烁」根因）。
+      const scrollHeight = Number(el.scrollHeight)
+      const height = Math.max(140, Math.min(Number.isFinite(scrollHeight) && scrollHeight > 0 ? scrollHeight : 300, view.height - PANEL_MARGIN * 2))
+      const sig = [
+        Math.round(view.width), Math.round(view.height),
+        rowNow.ball ? Math.round(rowNow.ball.left) + ':' + Math.round(rowNow.ball.top) : '-',
+        rowNow.bubble ? Math.round(rowNow.bubble.left) + ':' + Math.round(rowNow.bubble.top) : '-',
+        anchorRect ? Math.round(anchorRect.left) + ':' + Math.round(anchorRect.top) : '-',
+        bubbleVisibleRef.current === false ? '0' : '1',
+      ].join('|')
+      const preferredMode = lastPlaceSigRef.current === sig ? lastPlaceModeRef.current : null
       const next = placePanel({
-        row: rowNow, view, width: PANEL_MAX_WIDTH, height, avoidRects: avoid, rowRects,
+        row: rowNow, view, width: PANEL_MAX_WIDTH, height, avoidRects: avoid, rowRects, preferredMode,
       })
       if (!next) return
+      lastPlaceSigRef.current = sig
+      lastPlaceModeRef.current = next.mode
       setBox((prev) => {
         if (prev && Math.abs(prev.left - next.left) < 0.5 && Math.abs(prev.top - next.top) < 0.5 &&
           Math.abs(prev.width - next.width) < 0.5 && Math.abs(prev.maxHeight - next.maxHeight) < 0.5) {
@@ -859,18 +879,23 @@ export function createLauncher({ React, h }) {
 
     useEffect(() => {
       let raf = 0
-      const loop = () => {
-        if (placeRef.current && document.visibilityState !== 'hidden') placeRef.current()
-        raf = requestAnimationFrame(loop)
+      let lastAt = 0
+      const nowMs = () => (typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now())
+      const run = (force) => {
+        if (!placeRef.current) return
+        if (document.visibilityState === 'hidden' || launcherDragging) return
+        const now = nowMs()
+        if (!force && now - lastAt < PLACE_MIN_INTERVAL_MS) return
+        lastAt = now
+        placeRef.current()
       }
+      const loop = () => { run(false); raf = requestAnimationFrame(loop) }
       loop()
-      const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(() => { if (placeRef.current) placeRef.current() }) : null
-      if (ro && panelRef.current) ro.observe(panelRef.current)
-      window.addEventListener('resize', loop)
+      const onResize = () => run(true)
+      window.addEventListener('resize', onResize)
       return () => {
         cancelAnimationFrame(raf)
-        if (ro) ro.disconnect()
-        window.removeEventListener('resize', loop)
+        window.removeEventListener('resize', onResize)
       }
     }, [])
 
@@ -1064,6 +1089,7 @@ export function createLauncher({ React, h }) {
 
     const onPointerDown = (event) => {
       if (event.button !== 0) return
+      launcherDragging = true
       const bubble = bubbleRect || (bubbleVisible ? rectFromElement(document.querySelector('.ay-yuan-bubble')) : null)
       dragRef.current = {
         startX: event.clientX, startY: event.clientY,
@@ -1092,6 +1118,7 @@ export function createLauncher({ React, h }) {
       }
     }
     const onPointerUp = (event) => {
+      launcherDragging = false
       const drag = dragRef.current
       dragRef.current = null
       if (!drag) return
@@ -1101,8 +1128,9 @@ export function createLauncher({ React, h }) {
       }
       try { event.currentTarget.releasePointerCapture(event.pointerId) } catch {}
     }
-    const onPointerCancel = () => { dragRef.current = null }
+    const onPointerCancel = () => { launcherDragging = false; dragRef.current = null }
     const onClick = () => {
+      launcherDragging = false
       if (movedRef.current) { movedRef.current = false; return }
       setOpen((value) => !value)
     }
@@ -1253,10 +1281,14 @@ export function createLauncher({ React, h }) {
         'aria-label': '阿源语音通话',
         'aria-expanded': open,
         'data-ayuan-ignore-origin': '',
-        onPointerEnter: () => {
+        onPointerEnter: (event) => {
+          // 触摸/触控笔没有「悬停」语义；移动端 pointerenter 会随元素在手指下移动反复触发，
+          // 进而反复展开/收起贴边 dock → 整排按钮闪烁。只让鼠标驱动 dock 展开。
+          if (event && event.pointerType && event.pointerType !== 'mouse') return
           try { window.dispatchEvent(new CustomEvent('leo-quick:dock-reveal-v1', { detail: { active: true } })) } catch {}
         },
-        onPointerLeave: () => {
+        onPointerLeave: (event) => {
+          if (event && event.pointerType && event.pointerType !== 'mouse') return
           try { window.dispatchEvent(new CustomEvent('leo-quick:dock-reveal-v1', { detail: { active: false } })) } catch {}
         },
         onPointerDown, onPointerMove, onPointerUp, onPointerCancel,
