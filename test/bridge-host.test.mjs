@@ -59,10 +59,15 @@ function createFakeAgent(id, { cwd = 'C:\\Users\\23677\\Downloads', lastEventTim
   return agent
 }
 
-function createFakeHost(agents) {
+function createFakeHost(agents, { controller, defaultModel } = {}) {
   const listeners = new Map()
   const emitted = []
   const ctx = {
+    get(name) {
+      if (name === 'sessionController') return controller
+      if (name === 'agentDefaultModel') return defaultModel
+      return undefined
+    },
     on(name, handler, options = {}) {
       const list = listeners.get(name) || []
       if (options.prepend) list.unshift(handler)
@@ -107,8 +112,48 @@ function createFakeHost(agents) {
   return { ctx, emit, invoke, listeners, emitted }
 }
 
-async function startBridgeHost({ agents, tokenFile }) {
-  const host = createFakeHost(agents)
+/**
+ * 模拟宿主 SessionController：新建会话时把新 agent 塞进同一个 live roots 数组，
+ * 恢复会话时从 persisted 里把它变成 live（与真实宿主的行为一致）。
+ */
+function createFakeSessionController({ agents }) {
+  const created = []
+  const resumed = []
+  const renamed = []
+  const persisted = new Map()
+  const controller = {
+    created,
+    resumed,
+    renamed,
+    persisted,
+    createImpl: null,
+    async create(request) {
+      if (controller.createImpl) return await controller.createImpl(request)
+      const id = `session-voice-${created.length + 1}`
+      const agent = createFakeAgent(id, { cwd: request.cwd })
+      agents.push(agent)
+      created.push({ request, id })
+      return { sessionId: id }
+    },
+    async resolveAgent(sessionId) {
+      resumed.push(sessionId)
+      const live = agents.find(agent => agent.id === sessionId)
+      if (live) return live
+      const stored = persisted.get(sessionId)
+      if (!stored) throw new Error(`session not found: ${sessionId}`)
+      agents.push(stored)
+      return stored
+    },
+    async rename(request) {
+      renamed.push(request)
+      return { title: request.title, seq: 1 }
+    },
+  }
+  return controller
+}
+
+async function startBridgeHost({ agents, tokenFile, controller, config = {} }) {
+  const host = createFakeHost(agents, { controller })
   let handler = null
   const webServer = {
     register(route) {
@@ -120,7 +165,7 @@ async function startBridgeHost({ agents, tokenFile }) {
   const bridge = createVoiceBridge({
     ctx: host.ctx,
     webServer,
-    config: { tokenFile },
+    config: { tokenFile, ...config },
     log: () => {},
   })
   const server = http.createServer((req, res) => handler(req, res))
@@ -445,6 +490,182 @@ test('并发与鉴权：第二个任务 409 BRIDGE_BUSY；错误 token 401', asy
       headers: { authorization: 'Bearer wrong-token' },
     })
     assert.equal(unauthorized.status, 401)
+  } finally {
+    host.bridge.close()
+    await closeServer(host.server)
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+// ------------------------------------------------------------ 工作区优先 / 自动新建专用会话
+
+const WORKSPACE = 'C:\\data\\ayuan\\yuan\\workspace'
+
+function workspaceHostOptions({ dir, controller, extra = {} }) {
+  return {
+    controller,
+    config: { cwdPrefix: 'C:/data/ayuan/yuan/workspace', sessionStateFile: path.join(dir, 'session.json'), ...extra },
+  }
+}
+
+test('cwdPrefix：工作区有 live 会话就只投它（不新建、不串台）', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'voice-bridge-host-'))
+  const main = createFakeAgent('session-main', { cwd: 'C:\\Users\\23677\\Downloads' })
+  const work = createFakeAgent('session-work', { cwd: WORKSPACE })
+  const agents = [main, work]
+  const controller = createFakeSessionController({ agents })
+  const host = await startBridgeHost({ agents, tokenFile: path.join(dir, 'bridge.json'), ...workspaceHostOptions({ dir, controller }) })
+  try {
+    const health = await requestJson(host.bridge, 'GET', '/health')
+    assert.equal(health.payload.target.sessionId, 'session-work')
+    assert.equal(health.payload.resolution.mode, 'workspace-live')
+    assert.equal(health.payload.autoCreateSession, true)
+    assert.equal(health.payload.sessionTitle, '语音通话')
+    assert.equal(controller.created.length, 0)
+
+    const task = await requestJson(host.bridge, 'POST', '/tasks', {
+      taskId: 'gw-work', ownerId: 'owner', instruction: '看看工作区里有什么',
+    })
+    assert.equal(task.status, 202)
+    assert.equal(task.payload.target.sessionId, 'session-work')
+    assert.equal(work.followups.length, 1)
+    assert.equal(main.followups.length, 0)
+    assert.equal(controller.created.length, 0)
+  } finally {
+    host.bridge.close()
+    await closeServer(host.server)
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('cwdPrefix：工作区没有 live 会话 → 自动新建「语音通话」，不落回主会话', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'voice-bridge-host-'))
+  const main = createFakeAgent('session-main', { cwd: 'C:\\Users\\23677\\Downloads' })
+  const agents = [main]
+  const controller = createFakeSessionController({ agents })
+  const host = await startBridgeHost({ agents, tokenFile: path.join(dir, 'bridge.json'), ...workspaceHostOptions({ dir, controller }) })
+  try {
+    // 健康检查只探测，不产生副作用
+    const health = await requestJson(host.bridge, 'GET', '/health')
+    assert.equal(health.payload.target, null)
+    assert.equal(health.payload.warning.code, 'AUTO_CREATE_PENDING')
+    assert.equal(controller.created.length, 0)
+
+    const task = await requestJson(host.bridge, 'POST', '/tasks', {
+      taskId: 'gw-create', ownerId: 'owner', instruction: '查一下今天的日程',
+    })
+    assert.equal(task.status, 202)
+    assert.equal(controller.created.length, 1)
+    assert.equal(controller.created[0].request.cwd, 'C:/data/ayuan/yuan/workspace')
+    const createdAgent = agents.find(agent => agent.id === controller.created[0].id)
+    assert.ok(createdAgent, '新建的会话必须真的 live')
+    assert.equal(createdAgent.followups.length, 1)
+    assert.equal(main.followups.length, 0, '绝不能落回主会话')
+    assert.equal(task.payload.target.sessionId, createdAgent.id)
+    // 新会话被命名成「语音通话」，并记进状态文件
+    assert.equal(controller.renamed.length, 1)
+    assert.equal(controller.renamed[0].title, '语音通话')
+    assert.equal(controller.renamed[0].sessionId, createdAgent.id)
+    const state = JSON.parse(fs.readFileSync(path.join(dir, 'session.json'), 'utf8'))
+    assert.equal(state.sessionId, createdAgent.id)
+  } finally {
+    host.bridge.close()
+    await closeServer(host.server)
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('专用语音会话记住后复用：仍 live 就直接用，不再新建', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'voice-bridge-host-'))
+  const main = createFakeAgent('session-main', { cwd: 'C:\\Users\\23677\\Downloads' })
+  const voice = createFakeAgent('session-voice', { cwd: WORKSPACE })
+  voice.alive = false // 不是 root，但仍是 live agent
+  const agents = [main, voice]
+  const controller = createFakeSessionController({ agents })
+  fs.writeFileSync(path.join(dir, 'session.json'), JSON.stringify({ sessionId: 'session-voice', cwd: WORKSPACE }))
+  const host = await startBridgeHost({ agents, tokenFile: path.join(dir, 'bridge.json'), ...workspaceHostOptions({ dir, controller }) })
+  try {
+    const task = await requestJson(host.bridge, 'POST', '/tasks', {
+      taskId: 'gw-reuse', ownerId: 'owner', instruction: '继续刚才那件事',
+    })
+    assert.equal(task.status, 202)
+    assert.equal(task.payload.target.sessionId, 'session-voice')
+    assert.equal(voice.followups.length, 1)
+    assert.equal(controller.created.length, 0)
+    assert.equal(controller.resumed.length, 0)
+  } finally {
+    host.bridge.close()
+    await closeServer(host.server)
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('专用语音会话已关闭但还持久化 → 恢复它，不新建', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'voice-bridge-host-'))
+  const main = createFakeAgent('session-main', { cwd: 'C:\\Users\\23677\\Downloads' })
+  const agents = [main]
+  const controller = createFakeSessionController({ agents })
+  controller.persisted.set('session-stored', createFakeAgent('session-stored', { cwd: WORKSPACE }))
+  fs.writeFileSync(path.join(dir, 'session.json'), JSON.stringify({ sessionId: 'session-stored', cwd: WORKSPACE }))
+  const host = await startBridgeHost({ agents, tokenFile: path.join(dir, 'bridge.json'), ...workspaceHostOptions({ dir, controller }) })
+  try {
+    const task = await requestJson(host.bridge, 'POST', '/tasks', {
+      taskId: 'gw-resume', ownerId: 'owner', instruction: '接着昨天的继续说',
+    })
+    assert.equal(task.status, 202)
+    assert.deepEqual(controller.resumed, ['session-stored'])
+    assert.equal(controller.created.length, 0, '能恢复就不该新建')
+    assert.equal(task.payload.target.sessionId, 'session-stored')
+    assert.equal(controller.renamed.length, 0, '恢复的会话不改名')
+  } finally {
+    host.bridge.close()
+    await closeServer(host.server)
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('autoCreateSession:false：退回最近活跃会话（旧行为随时可回）', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'voice-bridge-host-'))
+  const main = createFakeAgent('session-main', { cwd: 'C:\\Users\\23677\\Downloads' })
+  const agents = [main]
+  const controller = createFakeSessionController({ agents })
+  const host = await startBridgeHost({
+    agents,
+    tokenFile: path.join(dir, 'bridge.json'),
+    ...workspaceHostOptions({ dir, controller, extra: { autoCreateSession: false } }),
+  })
+  try {
+    const health = await requestJson(host.bridge, 'GET', '/health')
+    assert.equal(health.payload.target.sessionId, 'session-main')
+    assert.equal(health.payload.resolution.mode, 'fallback-auto-create-off')
+    const task = await requestJson(host.bridge, 'POST', '/tasks', {
+      taskId: 'gw-off', ownerId: 'owner', instruction: '随手记一下',
+    })
+    assert.equal(task.status, 202)
+    assert.equal(main.followups.length, 1)
+    assert.equal(controller.created.length, 0)
+  } finally {
+    host.bridge.close()
+    await closeServer(host.server)
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('自动新建失败 → 409 SESSION_CREATE_FAILED，不落回主会话', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'voice-bridge-host-'))
+  const main = createFakeAgent('session-main', { cwd: 'C:\\Users\\23677\\Downloads' })
+  const agents = [main]
+  const controller = createFakeSessionController({ agents })
+  controller.createImpl = async () => { throw new Error('磁盘不可写') }
+  const host = await startBridgeHost({ agents, tokenFile: path.join(dir, 'bridge.json'), ...workspaceHostOptions({ dir, controller }) })
+  try {
+    const task = await requestJson(host.bridge, 'POST', '/tasks', {
+      taskId: 'gw-fail', ownerId: 'owner', instruction: '随便做点什么',
+    })
+    assert.equal(task.status, 409)
+    assert.equal(task.payload.error.code, 'SESSION_CREATE_FAILED')
+    assert.match(task.payload.error.message, /自动新建.*磁盘不可写/)
+    assert.equal(main.followups.length, 0, '失败也不能偷偷投给主会话')
   } finally {
     host.bridge.close()
     await closeServer(host.server)

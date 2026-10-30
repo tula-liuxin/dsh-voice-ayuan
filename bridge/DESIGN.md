@@ -60,7 +60,7 @@ DSH 侧（插件宿主进程）能拿到的东西（读自可读安装的 `*.d.t
    │  POST {bridge}/tasks + GET {bridge}/tasks/:id/events (SSE)  ← 127.0.0.1 + bearer token
    ▼
  lib/bridge.js（DSH 插件宿主进程）
-   │  1) 选目标会话（当前 live root，最近活动优先）
+   │  1) 选目标会话（sessionId 覆盖 → 工作区 live 会话 → 自动新建「语音通话」 → 最近活跃 root）
    │  2) agent.followup(createUserMessage(instruction))   ← 真正的当前会话
    │  3) 订阅 session/event + agent/*，把这一轮映射成进度事件
    │  4) turn/end 后取这一轮最后的 assistant/message 文本（≤600 字）
@@ -85,7 +85,7 @@ DSH 侧（插件宿主进程）能拿到的东西（读自可读安装的 `*.d.t
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| GET | `/health` | 桥存活 + 当前目标会话（`{ok, phase, target:{sessionId,cwd,label}, warning?, activeTask}`）|
+| GET | `/health` | 桥存活 + 当前目标会话（`{ok, phase, target:{sessionId,cwd,label}, resolution:{mode,sessionId,cwd?,created?}, autoCreateSession, sessionTitle, warning?, activeTask}`）；只探测、不新建会话 |
 | GET | `/status` | 诊断：所有 live root 候选（含 lastUserAt/lastEventAt）、当前任务、最近 5 个任务 |
 | POST | `/tasks` | `{taskId, ownerId, instruction}` → `202 {bridgeTaskId, acceptedAt, target}`；忙/无会话 → 409 带明确错误码 |
 | GET | `/tasks/:id/events?since=N` | SSE，先回放 `seq>since` 的事件再持续推送；终态后关闭 |
@@ -131,20 +131,27 @@ Adapter 侧事件映射（`bridge/backend-adapter.mjs`）：
 
 ## 4. 会话选择与并发
 
-- 目标 = `ctx.agents.roots()` 里过滤掉 `header.origin==='subagent'`/`delegationDepth>0` 之后的 **live root agent**，
-  按「最近一次 user/message 时间 → 最近事件时间 → 会话末事件时间 → 注册顺序」取第一。插件加载时对已有
-  live root 做一次基线扫描。
-- 可用 `config.bridge.sessionId` 显式覆盖（profile patch 里加，不默认写）。
-- 没有任何 live root → `POST /tasks` 返回 409 `NO_LIVE_SESSION`，语音侧会收到明确失败文本
-  （"当前没有正在使用的 DSH 会话…"）并播报；**绝不新建会话**。
+- 候选 = `ctx.agents.roots()` 里过滤掉 `header.origin==='subagent'`/`delegationDepth>0` 之后的 **live root agent**，
+  同一组候选内按「最近一次 user/message 时间 → 最近事件时间 → 会话末事件时间 → 注册顺序」取第一。
+  插件加载时对已有 live root 做一次基线扫描。
+- **目标解析顺序（v0.2.4）**：
+  1. `config.bridge.sessionId`：只用它（不在 live 就按 id 恢复）；
+  2. `config.bridge.cwdPrefix`（也接受 `preferCwd`）：只投该工作区里的 live 会话；一个都没有时
+     **自动新建一张「专用语音会话」**（默认标题「语音通话」，`sessionTitle` 可改），把 id 记进
+     `~/.dsh/voice-ayuan-session.json`；下次优先复用，重启后再来按 id 恢复（不是新建）。
+     `autoCreateSession: false` 退回旧行为（最近活跃 root）；
+  3. 都没配：退回「最近活跃 live root」；一个 live root 都没有时 409 `NO_LIVE_SESSION` 明确失败。
+- 配了 `cwdPrefix` 后，语音任务**不会**落进用户正在长聊的主会话；工作区没开会话时也不报错，而是新建专用会话。
+- 新建/恢复走宿主的 `ctx.get('sessionController')`（GUI「新建会话」同一条业务路径，含默认模型与 preset 合成），
+  会话所有权在宿主侧，插件热重载不会连带销毁它。
 - v1 全局串行：宿主同一时刻只跑一个语音任务，第二个直接 409 `BRIDGE_BUSY`（"上一项还没结束，先等或取消"）。
   Gateway 侧 TaskManager 本身也按 `owner` 串行（`laneKey: backend:<ownerId>`）。
 - 用户手打的消息与语音任务共用同一个 Agent：语音任务在队列里排队（`followup` = next-turn），
   不会打断用户正在跑的一轮；取消时只移除/打断**我们这条指令对应的 turn**，不会误伤用户手打的那轮。
 
 限制（v1）：
-- 同一进程里如果用户同时打开多个 DSH 会话窗口，无法从宿主侧知道"哪个窗口在最前面"，
-  只能近似为"最近有用户消息的会话"；多窗口场景下可能投到另一个最近活跃会话（DESIGN 明示，可用配置覆盖）。
+- 没配 `cwdPrefix`/`sessionId` 时，同一进程里如果用户同时打开多个 DSH 会话窗口，无法从宿主侧知道
+  "哪个窗口在最前面"，只能近似为"最近有用户消息的会话"（配了 `cwdPrefix` 后不存在这个问题）。
 - 一次只能有一个语音任务；"两件事同时办"需后续版本。
 - 若用户正处在一个需要交互审批的会话策略（`ask`），语音确认会接管该权限请求（GUI 不再弹窗）；
   若策略是 `never`（当前桌面是 danger-full-access），则没有审批请求可中转。

@@ -14,3 +14,8 @@
           remotePort: 8765
         gateway:
           allowedOrigin: http://127.0.0.1:7969
+        # 语音任务投给谁（宿主侧默认值；profile patch 里覆盖）：
+        # bridge:
+        #   cwdPrefix: C:/path/to/ayuan-workspace  # 只投该工作区的 live 会话；没有就自动新建「语音通话」
+        #   autoCreateSession: true                # false = 退回「最近活跃会话」（旧行为）
+        #   sessionTitle: 语音通话

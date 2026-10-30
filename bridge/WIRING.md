@@ -184,7 +184,9 @@
 
 要点：
 - 默认启用（`config.bridge.enabled: false` 可关）；bridge 创建失败会抛错让插件加载失败（不静默降级成"只能聊天"）。
-- 用户 profile 的 `cordis.patch.yml` 不需要改（除非要 `bridge.sessionId` 覆盖目标会话）。
+- 用户 profile 的 `cordis.patch.yml` 推荐配 `bridge.cwdPrefix: <阿源工作区>`：语音任务只进该工作区的
+  live 会话；一个都没有时自动在工作区新建一张「语音通话」（`bridge.autoCreateSession: false` 关闭该行为，
+  `bridge.sessionId` 则完全钉死目标会话）。
 - 网关子进程新增 env 只在 bridge 启用时出现。
 
 ## 3. 新增依赖注入说明
