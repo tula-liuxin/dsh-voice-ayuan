@@ -184,6 +184,17 @@ export function apply(ctx, config = {}) {
       } catch (error) {
         status = { ok: false, phase: 'error', error: String(error && error.message || error).slice(0, 200) }
       }
+      // 自愈：启动阶段隧道慢/失败会让网关一直停在 stopped，而 boot 只跑一次。
+      // 链路已经就绪时补启一次网关（用户点「重试」会重新轮询本接口），不必重启整个 DSH。
+      if (!status || !status.ok) {
+        try {
+          if (gateway.phase === 'stopped' && tunnel.status().phase === 'ready') {
+            diag({ kind: 'gateway-self-heal' })
+            gateway.start().catch(() => {})
+            status = { ok: false, phase: 'starting' }
+          }
+        } catch {}
+      }
       if (!status || !status.ok) {
         diag({ kind: 'status-not-ready', status: status && status.phase })
         json(res, {
