@@ -104,6 +104,8 @@ export function createBrowserAudioEngine({ onFrame, onBargeIn, globals = globalT
   let scriptNode = null
   let muteGain = null
   let stopped = false
+  let muted = false
+  let zeroBuf = new Float32Array(0)
   let worklet = true
   let pending = new Float32Array(MIC_BATCH_SAMPLES)
   let pendingLength = 0
@@ -146,8 +148,32 @@ export function createBrowserAudioEngine({ onFrame, onBargeIn, globals = globalT
 
   const isPlaying = () => queue.sources.size > 0
 
+  // 静音期间上游收到的仍是等长零样本：音频流节奏连续（服务端不会因为「没数据」告警/超时），
+  // 但 VAD 听不到人声；本端也不做打断检测——用户已主动关麦。
+  const zeroes = (length) => {
+    if (zeroBuf.length < length) zeroBuf = new Float32Array(Math.max(length, 1024))
+    return zeroBuf.subarray(0, length)
+  }
+
+  const pushBatch = (channel) => {
+    // 批量聚合到 ~2048 样本再回调（48k ≈ 43ms/条）。
+    if (pendingLength + channel.length > pending.length) {
+      const grown = new Float32Array(Math.max(pending.length * 2, pendingLength + channel.length, MIC_BATCH_SAMPLES))
+      grown.set(pending.subarray(0, pendingLength))
+      pending = grown
+    }
+    pending.set(channel, pendingLength)
+    pendingLength += channel.length
+    if (pendingLength >= MIC_BATCH_SAMPLES) {
+      const batch = pending.slice(0, pendingLength)
+      pendingLength = 0
+      try { onFrame?.(batch) } catch {}
+    }
+  }
+
   const pushFrame = (channel) => {
     if (stopped || !ctx || !channel || channel.length === 0) return
+    if (muted) { pushBatch(zeroes(channel.length)); return }
     const frameMs = (channel.length / ctx.sampleRate) * 1000
     // 本端打断检测：只在播放中、能量持续超过阈值时触发一次（带冷却）。
     let energy = 0
@@ -164,19 +190,15 @@ export function createBrowserAudioEngine({ onFrame, onBargeIn, globals = globalT
     } else if (voicedMs > 0) {
       voicedMs = Math.max(0, voicedMs - frameMs * 0.5)
     }
-    // 批量聚合到 ~2048 样本再回调（48k ≈ 43ms/条）。
-    if (pendingLength + channel.length > pending.length) {
-      const grown = new Float32Array(Math.max(pending.length * 2, pendingLength + channel.length, MIC_BATCH_SAMPLES))
-      grown.set(pending.subarray(0, pendingLength))
-      pending = grown
-    }
-    pending.set(channel, pendingLength)
-    pendingLength += channel.length
-    if (pendingLength >= MIC_BATCH_SAMPLES) {
-      const batch = pending.slice(0, pendingLength)
-      pendingLength = 0
-      try { onFrame?.(batch) } catch {}
-    }
+    pushBatch(channel)
+  }
+
+  // 关麦 = 停止上行真实人声（静音帧保活连接）并禁用采集轨道；开麦恢复。
+  const setMuted = (value) => {
+    muted = Boolean(value)
+    voicedMs = 0
+    try { if (stream) stream.getAudioTracks().forEach((track) => { track.enabled = !muted }) } catch {}
+    return muted
   }
 
   const describe = () => ({
@@ -227,6 +249,7 @@ export function createBrowserAudioEngine({ onFrame, onBargeIn, globals = globalT
 
   const stop = () => {
     stopped = true
+    muted = false
     flush()
     try { if (workletNode) workletNode.port.onmessage = null } catch {}
     try { if (scriptNode) scriptNode.onaudioprocess = null } catch {}
@@ -251,6 +274,9 @@ export function createBrowserAudioEngine({ onFrame, onBargeIn, globals = globalT
     flush,
     isPlaying,
     resume,
+    setMuted,
+    toggleMuted: () => setMuted(!muted),
+    get muted() { return muted },
     get sampleRate() { return ctx ? ctx.sampleRate : 0 },
   }
 }
@@ -263,6 +289,7 @@ export function createVoiceSession({
   onCaption = () => {},
   onTranscript = () => {},
   onMic = () => {},
+  onMuted = () => {},
   onDiag = () => {},
   onLog = () => {},
   fetchImpl = typeof fetch === 'function' ? fetch.bind(globalThis) : null,
@@ -288,6 +315,7 @@ export function createVoiceSession({
   let client = null
   let audio = null
   let micReady = false
+  let muted = false
   let phase = 'idle'
   let attempt = 0
   let openCount = 0
@@ -321,6 +349,7 @@ export function createVoiceSession({
     ]
     if (lastClose) parts.push('上次关闭 ' + lastClose.code + (lastClose.wasClean ? '(正常)' : '(异常)') + ' ' + Math.round(lastClose.elapsedMs) + 'ms')
     if (retryDelays.length) parts.push('attempt=' + attempt + '/' + retryDelays.length)
+    if (muted) parts.push('mic 静音')
     if (diagExtra) parts.push(diagExtra)
     return parts.join(' · ')
   }
@@ -704,6 +733,24 @@ export function createVoiceSession({
     postReport('voice-barge-in')
   }
 
+  const applyMuted = (value) => {
+    muted = Boolean(value)
+    try { if (audio && typeof audio.setMuted === 'function') audio.setMuted(muted) } catch {}
+    try { onMuted(muted) } catch {}
+  }
+
+  // 通话中切换麦克风：关麦后不再上行真实人声（静音帧保活连接），开麦立即恢复。
+  const setMuted = (value) => {
+    if (disposed) return muted
+    const next = Boolean(value)
+    if (next === muted) return muted
+    applyMuted(next)
+    onStep(next ? 'mic muted · 本端静音，不再上行人声' : 'mic live · 已恢复上行麦克风')
+    pushDiag()
+    postReport(next ? 'voice-mic-muted' : 'voice-mic-unmuted')
+    return muted
+  }
+
   const openMic = async () => {
     if (disposed || micReady) return
     setPhase('mic', { step: 'mic open', state: 'ready' })
@@ -713,6 +760,7 @@ export function createVoiceSession({
       if (disposed) { try { audio.stop() } catch {} ; audio = null ; return }
       micReady = true
       onMic('on')
+      if (muted) applyMuted(true)
       const capture = info && info.worklet === false ? 'ScriptProcessor 兜底' : 'AudioWorklet'
       const rateNote = info && info.sampleRate ? info.sampleRate + 'Hz→16kHz' : '16kHz'
       stats.liveAt = new Date(now()).toISOString()
@@ -938,6 +986,7 @@ export function createVoiceSession({
     sessionReady = false
     if (audio) { try { audio.stop() } catch {} ; audio = null }
     micReady = false
+    applyMuted(false)
     onMic('opening')
     start()
   }
@@ -954,6 +1003,7 @@ export function createVoiceSession({
       audio = null
     }
     micReady = false
+    muted = false
     phase = 'stopped'
   }
 
@@ -961,6 +1011,9 @@ export function createVoiceSession({
     start,
     stop,
     retry,
+    setMuted,
+    toggleMuted: () => setMuted(!muted),
+    get muted() { return muted },
     get phase() { return phase },
     get openCount() { return openCount },
     get wsUrl() { return wsUrl },

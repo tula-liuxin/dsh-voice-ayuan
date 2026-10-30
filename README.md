@@ -9,6 +9,7 @@
 - [x] 同源 WebSocket 代理：`/voice-ayuan/rt`（绕开跨端口 origin 校验）
 - [x] 状态路由：`/voice-ayuan/status`
 - [x] 客户端：composer 图标 + 通话浮层 + 麦克风采集 + 播放（`client.js`，esbuild 打包）
+- [x] 通话中麦克风开关：点面板底部「🎙 麦克风已开启」即可关麦/开麦（关麦后不再上行人声，连接与播放不断）
 - [ ] BackendPort 适配器：把语音派活接到当前 DSH 会话
 - [ ] 任务级口头确认
 - [ ] 双向录音

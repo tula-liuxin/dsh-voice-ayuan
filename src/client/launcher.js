@@ -47,6 +47,10 @@ const CSS = [
   '.va-panel[data-state=error] .va-dot{background:var(--dsw-alias-state-error-primary,#f85149)}',
   '.va-panel[data-state=ready] .va-dot{background:var(--dsw-alias-state-business-primary,#4176e6)}',
   '.va-panel[data-state=reconnecting] .va-dot{animation:va-breathe 1.2s ease-in-out infinite}',
+  // 主动静音：警示点（黄）+ 波形降透明并停动，一眼看出「无声可选」
+  '.va-panel[data-state=muted] .va-dot{background:var(--dsw-alias-state-warn-primary,#d29922);animation:none}',
+  '.va-panel[data-state=muted] .va-wave{opacity:.35}',
+  '.va-panel[data-state=muted] .va-wave span{animation:none;height:6px}',
   '@keyframes va-breathe{0%,100%{opacity:.5;transform:scale(.8)}50%{opacity:1;transform:scale(1.15)}}',
   '.va-panel__title{display:flex;flex-direction:column;min-width:0;gap:1px;flex:1 1 auto}',
   '.va-panel__title strong{font-size:13px;font-weight:600;line-height:18px;color:var(--dsw-alias-label-primary,#0f1115);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
@@ -72,8 +76,13 @@ const CSS = [
   '.va-stt__text[data-empty=true]{color:var(--dsw-alias-label-tertiary,#81858c);font-size:12px}',
   '.va-stt__sep{height:1px;background:var(--dsw-alias-border-l2,#0000001a);flex:none;margin:1px 0}',
   '.va-foot{display:flex;align-items:center;gap:8px;flex:none;flex-wrap:wrap}',
-  '.va-mic{display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border-radius:999px;border:1px solid var(--dsw-alias-border-l2,#0000001a);background:var(--dsw-alias-bg-layer-1,#fff);color:var(--dsw-alias-label-secondary,#61666b);font-size:11px;line-height:18px;white-space:nowrap}',
+  '.va-mic{display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border-radius:999px;border:1px solid var(--dsw-alias-border-l2,#0000001a);background:var(--dsw-alias-bg-layer-1,#fff);color:var(--dsw-alias-label-secondary,#61666b);font:inherit;font-size:11px;line-height:18px;white-space:nowrap;cursor:pointer}',
+  '.va-mic:hover:not(:disabled){background:var(--dsw-alias-bg-layer-2,#f3f5fa)}',
+  '.va-mic:active:not(:disabled){transform:scale(.97)}',
+  '.va-mic:focus-visible{outline:2px solid var(--dsw-alias-brand-primary,#506be2);outline-offset:1px}',
+  '.va-mic:disabled{cursor:default;opacity:.75}',
   '.va-mic[data-mic=on]{color:var(--dsw-alias-state-success-primary,#2ea043)}',
+  '.va-mic[data-mic=off]{color:var(--dsw-alias-state-warn-primary,#d29922)}',
   '.va-mic[data-mic=error]{color:var(--dsw-alias-state-error-primary,#f85149)}',
   '.va-retry{display:inline-flex;align-items:center;justify-content:center;padding:2px 10px;border:1px solid var(--dsw-alias-border-l2,#0000001a);border-radius:999px;background:transparent;color:var(--dsw-alias-label-primary,#0f1115);font:inherit;font-size:11px;line-height:18px;cursor:pointer}',
   '.va-retry:hover{background:var(--dsw-alias-bg-layer-2,#f3f5fa)}',
@@ -676,7 +685,7 @@ function readAvoidRects(doc, win) {
 // 说明：位置计算不再用 elementFromPoint 探测页面内容（会把宿主侧栏/阿源浮层误判成占用，
 // 导致电话失去贴邻居的槽位、掉到右下角被浮层挡住）；现在只由 computePhoneSpot(anchor) 派生。
 
-const BUILD_TAG = 'ui2-dock4-stt-1'
+const BUILD_TAG = 'ui2-dock4-stt-2-mic-toggle'
 
 function reportMetrics(payload) {
   payload.buildTag = BUILD_TAG
@@ -728,7 +737,7 @@ export function formatMetricsLine(metrics) {
 }
 
 // 诚实标题：上游 speech-to-speech 没就绪 ≠ 通话中，也不是错误；有 voice connected/转写证据才算通话中。
-export function deriveVoiceStatus({ state, step = '', detail = '', mic = 'opening', caption = '' }) {
+export function deriveVoiceStatus({ state, step = '', detail = '', mic = 'opening', muted = false, caption = '' }) {
   const stepText = String(step || '')
   const detailText = String(detail || '')
   const upstreamDown = /voice\s*unavailable|unavailable/i.test(stepText) || /unavailable|不可用/i.test(detailText)
@@ -736,6 +745,10 @@ export function deriveVoiceStatus({ state, step = '', detail = '', mic = 'openin
   const micReady = mic === 'on'
   if (state === 'error') {
     return { title: '连接失败', sub: detailText || '语音链路建立失败', tone: 'error', retry: true }
+  }
+  // 主动关麦优先于「通话中」：无声可选时，标题必须如实说麦克风已关。
+  if (muted) {
+    return { title: '麦克风已静音', sub: '点一下下方的麦克风即可恢复说话', tone: 'muted', retry: false }
   }
   if (state === 'live' && voiceConnected) {
     return { title: '通话中', sub: '实时语音 · 随时打断', tone: 'live', retry: false }
@@ -758,6 +771,22 @@ export function deriveVoiceStatus({ state, step = '', detail = '', mic = 'openin
     return { title: '已连接，等待麦克风…', sub: '正在打开麦克风', tone: 'ready', retry: false }
   }
   return { title: '连接中…', sub: '正在建立语音链路', tone: 'connecting', retry: false }
+}
+
+// 面板底部麦克风胶囊的纯派生：文案/图标/颜色状态/可点性集中一处，便于单测。
+// 关麦是「停止上行人声」，不是断开连接：胶囊在采集就绪后始终可点，用来反复开关。
+export function deriveMicControl({ mic = 'opening', muted = false } = {}) {
+  const error = mic === 'error'
+  const ready = mic === 'on'
+  return {
+    label: error ? '麦克风不可用' : muted ? '麦克风已关闭' : ready ? '麦克风已开启' : '正在打开麦克风',
+    icon: !error && muted ? '🔇' : '🎙',
+    dataMic: error ? 'error' : muted ? 'off' : mic,
+    disabled: !ready,
+    ariaPressed: muted ? 'true' : 'false',
+    ariaLabel: error ? '麦克风不可用' : muted ? '麦克风已关闭，点击打开' : ready ? '麦克风已开启，点击关闭' : '正在打开麦克风',
+    hint: muted ? '已静音 · 点麦克风恢复 · Esc 关闭' : '说话即可，随时打断 · Esc 关闭',
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -802,6 +831,8 @@ export function createLauncher({ React, h }) {
   function VoicePanel({ onClose, row, metrics, bubbleVisible, anchorRect = null }) {
     const [state, setState] = useState('connecting')
     const [mic, setMic] = useState('opening')
+    // 麦克风开关（用户主动静音）：视图侧状态由 session 的 onMuted 回调同步，点击走 session.setMuted。
+    const [muted, setMuted] = useState(false)
     const [step, setStep] = useState('init')
     const [detail, setDetail] = useState('')
     const [diag, setDiag] = useState('')
@@ -831,6 +862,7 @@ export function createLauncher({ React, h }) {
         onDetail: setDetail,
         onTranscript: (event) => setTranscript((prev) => reduceTranscript(prev, event)),
         onMic: setMic,
+        onMuted: setMuted,
         onDiag: setDiag,
       })
       sessionRef.current = session
@@ -900,14 +932,21 @@ export function createLauncher({ React, h }) {
     }, [])
 
     // 诚实标题：上游未就绪时显示「正在连接语音服务…」，不再把「等上游」显示成「通话中」。
-    const voiceStatus = deriveVoiceStatus({ state, step, detail, mic, caption: transcript.user || transcript.assistant })
+    const voiceStatus = deriveVoiceStatus({ state, step, detail, mic, muted, caption: transcript.user || transcript.assistant })
     const dotLabel = voiceStatus.title
     const subLabel = voiceStatus.sub
     const displayState = voiceStatus.tone
     const retry = () => {
       try { sessionRef.current && sessionRef.current.retry && sessionRef.current.retry() } catch {}
     }
-    const micLabel = mic === 'on' ? '麦克风已开启' : mic === 'error' ? '麦克风不可用' : '正在打开麦克风'
+    // 麦克风胶囊也是开关：点一下关麦（不再上行人声），再点恢复。未就绪/出错时不可点。
+    const micControl = deriveMicControl({ mic, muted })
+    const toggleMute = () => {
+      if (micControl.disabled) return
+      const session = sessionRef.current
+      if (!session || typeof session.setMuted !== 'function') return
+      try { session.setMuted(!muted) } catch {}
+    }
     const pass = metrics ? metrics.pass : null
     const metricLine = formatMetricsLine(metrics)
     const panelStyle = {
@@ -952,11 +991,21 @@ export function createLauncher({ React, h }) {
         h('div', { className: 'va-stt__text', 'data-empty': transcript.assistant ? 'false' : 'true' },
           transcript.assistant || '阿源会在这里回应'))),
     h('div', { className: 'va-foot' },
-      h('span', { className: 'va-mic', 'data-mic': mic }, '🎙 ' + micLabel),
+      h('button', {
+        type: 'button',
+        className: 'va-mic',
+        'data-mic': micControl.dataMic,
+        'aria-pressed': micControl.ariaPressed,
+        'aria-label': micControl.ariaLabel,
+        title: mic === 'on' ? (muted ? '点击打开麦克风' : '点击关闭麦克风') : micControl.label,
+        disabled: micControl.disabled,
+        onPointerDown: (event) => event.stopPropagation(),
+        onClick: toggleMute,
+      }, micControl.icon + ' ' + micControl.label),
       voiceStatus.retry ? h('button', {
         type: 'button', className: 'va-retry', onClick: retry,
       }, '重试') : null,
-      h('span', { className: 'va-hint' }, '说话即可，随时打断 · Esc 关闭')),
+      h('span', { className: 'va-hint' }, micControl.hint)),
     h('div', { className: 'va-metric', 'data-pass': pass == null ? undefined : String(pass) }, metricLine),
     h('details', { className: 'va-diag', open: true },
       h('summary', null, '诊断' + (pass === false ? '（不变量 FAIL）' : pass === true ? '（PASS）' : '')),

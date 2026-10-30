@@ -206,10 +206,11 @@ launcher 只消费回调，不碰 Socket/AudioContext：
 - 实现：`formatMetricsLine(metrics)`（纯函数，已单测）；不再直接展示 gapLeft=-42 这类会让人误会的原始值。
 
 ### 10.2 面板标题（诚实状态，上游未就绪 ≠ 通话中）
-`deriveVoiceStatus({state, step, detail, mic, caption})` 纯函数派生：
+`deriveVoiceStatus({state, step, detail, mic, muted, caption})` 纯函数派生：
 | 条件 | 标题 | 副标题 | 点/波形 |
 | --- | --- | --- | --- |
 | state=error | 连接失败 | detail 或「语音链路建立失败」 | 红点 + 重试按钮 |
+| muted（非 error，优先于其它状态） | 麦克风已静音 | 点一下下方的麦克风即可恢复说话 | 警示点（黄，不呼吸）+ 波形停动 |
 | state=live 且（step 含 voice connected 或已有转写 delta） | 通话中 | 实时语音 · 随时打断 | 绿点呼吸 + 波形 |
 | step 含 voice unavailable / detail 含 unavailable·不可用 | 正在连接语音服务… | 本端麦克风已就绪，等服务端就绪后直接说话即可（mic 未开时写「正在准备本端麦克风…」） | 警示点 + 波形动画，**不是错误态** |
 | state=reconnecting | 正在重连… | 语音链路断开，自动重试中 | 警示点呼吸 |
@@ -218,3 +219,9 @@ launcher 只消费回调，不碰 Socket/AudioContext：
 | 其它 | 连接中… | 正在建立语音链路 | 警示点 + 波形 |
 > 背景：用户截图里会话 step 是 `voice unavailable · speech-to-speech`、detail 写「上游语音服务 unavailable」，但面板标题显示「通话中」→ 用户以为能说话却没反应。现在只有拿到 voice connected/转写证据才显示「通话中」。
 > 另：Lead 已关闭阿源贴边半隐藏，正常只剩 row 模式；column 分支保留作为兜底。
+
+### 10.3 麦克风开关（2026-10-30，0.2.9）
+- 面板底部 `🎙 麦克风已开启` 是 **按钮**：点击关麦（图标 🔇、文案「麦克风已关闭」、`data-mic=off`、黄字），再点恢复；麦克风未就绪/不可用时 `disabled`，避免点了没反应。
+- 关麦语义（`session.setMuted`）：不再上行真实人声，但会话继续按原节奏发送等长**零样本**（服务端 VAD 听不到人声，连接与播放不断）；同时 `MediaStreamTrack.enabled=false` 并关闭本端打断检测（静音期间阿源说话不会被回声打断）。开麦立即恢复。
+- 标题同步：静音时 `data-state=muted` 且标题「麦克风已静音」；连接失败仍优先显示错误 + 重试。
+- 测试：`test/mic-mute.test.mjs`（引擎零样本/轨道/打断 + 标题派生 + 会话接口）。
