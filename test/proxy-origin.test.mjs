@@ -1,74 +1,51 @@
-// 验证 Origin 重写假设：代理把任何 Origin 改写为 http://<请求 Host>，
-// 用官方 SDK（真实 hello 会话）逐种请求头验证是否能 session.ready。
+import test from 'node:test'
+import assert from 'node:assert/strict'
 import http from 'node:http'
-import { WebSocket } from 'ws'
-import { GatewayClient } from 'qwen-audio-agent/gateway-client-sdk'
+import { once } from 'node:events'
+import { WebSocket, WebSocketServer } from 'ws'
 import { proxyRealtimeUpgrade } from '../lib/ws-proxy.js'
 
-const logs = []
-const server = http.createServer((req, res) => { res.writeHead(404); res.end('no') })
-server.on('upgrade', (req, socket, head) => {
-  const host = req.headers.host || '127.0.0.1'
-  proxyRealtimeUpgrade(req, socket, head, { host: '127.0.0.1', port: 11490 }, {
-    rewriteOrigin: 'http://' + host,
-    onEvent: (event) => logs.push(event),
-  })
-})
-await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
-const port = server.address().port
-const url = 'ws://127.0.0.1:' + port + '/voice-ayuan/rt'
-
-function attempt(label, headers) {
-  return new Promise((resolve) => {
-    const observed = { connected: false, ready: false, closed: null }
-    const client = new GatewayClient({
-      url,
-      createSocket: (target) => new WebSocket(target, { headers }),
-      clientType: 'web',
-      clientVersion: 'probe',
-      clientInstanceId: 'probe-' + Math.random().toString(36).slice(2),
-      timeZone: 'Asia/Shanghai',
-      capabilities: ['input.audio'],
-      reconnect: false,
-      onStatus: (s) => {
-        if (s.state === 'connected') observed.connected = true
-        if (s.state === 'ready') { observed.ready = true; done() }
-        if (s.state === 'closed' || s.state === 'error') observed.closed = s.state
-      },
-      onEvent: () => {},
+// Only ephemeral, in-process peers: ordinary tests never connect to a user's
+// gateway or negotiate a real audio session.
+for (const origin of [null, 'null', 'http://dsh-app://x', 'http://127.0.0.1:9999', 'http://example.test']) {
+  test(`proxy rewrites Host/Origin and preserves frames: ${origin ?? '(absent)'}`, { timeout: 5000 }, async (t) => {
+    const received = []
+    const events = []
+    const upstream = http.createServer()
+    const peers = new WebSocketServer({ server: upstream })
+    peers.on('connection', (socket, request) => {
+      received.push({ url: request.url, origin: request.headers.origin, host: request.headers.host })
+      socket.on('message', (data, isBinary) => socket.send(data, { binary: isBinary }))
     })
-    let finished = false
-    const done = () => {
-      if (finished) return
-      finished = true
-      try { client.stop() } catch {}
-      console.log(label + ' => ' + JSON.stringify(observed))
-      setTimeout(resolve, 150)
-    }
-    client.start()
-    setTimeout(done, 6000)
+    await new Promise(resolve => upstream.listen(0, '127.0.0.1', resolve))
+    const upstreamPort = upstream.address().port
+    const expectedHost = `127.0.0.1:${upstreamPort}`
+    const proxy = http.createServer()
+    proxy.on('upgrade', (request, socket, head) => proxyRealtimeUpgrade(
+      request, socket, head, { host: '127.0.0.1', port: upstreamPort },
+      { rewriteOrigin: `http://${expectedHost}`, rewriteHost: expectedHost, onEvent: event => events.push(event) },
+    ))
+    await new Promise(resolve => proxy.listen(0, '127.0.0.1', resolve))
+    const client = new WebSocket(`ws://127.0.0.1:${proxy.address().port}/voice-ayuan/rt`, {
+      headers: origin === null ? {} : { Origin: origin },
+    })
+    t.after(async () => {
+      client.terminate()
+      for (const socket of peers.clients) socket.terminate()
+      await Promise.all([
+        new Promise(resolve => peers.close(resolve)),
+        new Promise(resolve => proxy.close(resolve)),
+        new Promise(resolve => upstream.close(resolve)),
+      ])
+    })
+    await once(client, 'open')
+    const reply = once(client, 'message')
+    client.send('isolated-proxy-check')
+    const [data, isBinary] = await reply
+    assert.equal(data.toString(), 'isolated-proxy-check')
+    assert.equal(isBinary, false)
+    assert.deepEqual(received, [{ url: '/api/realtime', origin: `http://${expectedHost}`, host: expectedHost }])
+    assert.equal(events[0].outcome, 'upgraded')
+    assert.equal(events[0].originalOrigin, origin)
   })
 }
-
-const chrome = {
-  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36',
-  Cookie: 'dsh_session=dummy',
-  'Sec-Fetch-Dest': 'websocket',
-  'Sec-Fetch-Mode': 'websocket',
-  'Sec-Fetch-Site': 'same-origin',
-  'Accept-Encoding': 'gzip, deflate, br, zstd',
-  'Accept-Language': 'zh-CN,zh;q=0.9',
-  'Cache-Control': 'no-cache',
-  Pragma: 'no-cache',
-}
-
-await attempt('A origin=null          ', { ...chrome, Origin: 'null' })
-await attempt('B origin=custom-scheme ', { ...chrome, Origin: 'http://dsh-app://x' })
-await attempt('C origin=wrong-port    ', { ...chrome, Origin: 'http://127.0.0.1:9999' })
-await attempt('D origin=none          ', { ...chrome })
-await attempt('E origin=real-port     ', { ...chrome, Origin: 'http://127.0.0.1:' + port })
-
-console.log('--- proxy events ---')
-for (const entry of logs) console.log(JSON.stringify(entry))
-server.close()
-setTimeout(() => process.exit(0), 100)

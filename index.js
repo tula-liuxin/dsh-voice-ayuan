@@ -2,6 +2,7 @@ import { fileURLToPath } from 'node:url'
 import { GatewayProcess } from './lib/gateway.js'
 import { createVoiceBridge } from './lib/bridge.js'
 import { SshTunnel } from './lib/tunnel.js'
+import { createVoiceStack } from './lib/stack.js'
 import { proxyRealtimeUpgrade } from './lib/ws-proxy.js'
 import { appendReport, diag, diagPaths, tailLog, writeReport } from './lib/diag.js'
 
@@ -117,22 +118,19 @@ export function apply(ctx, config = {}) {
       : {}),
   })
 
+  const stack = createVoiceStack({ tunnel, gateway })
   const boot = (async () => {
     try {
       diag({ kind: 'boot-start' })
-      await tunnel.start()
-      await gateway.start()
-      diag({ kind: 'boot-ready', gateway: gateway.status() })
+      const origin = await stack.start()
+      if (origin) diag({ kind: 'boot-ready', gateway: gateway.status() })
     } catch (error) {
       diag({ kind: 'boot-failed', message: String(error).slice(0, 300) })
       log('voice stack failed:', String(error).slice(0, 300))
     }
   })()
 
-  ctx.effect(() => () => {
-    gateway.stop()
-    tunnel.stop()
-  }, 'voice-ayuan: voice stack')
+  ctx.effect(() => () => stack.dispose(), 'voice-ayuan: voice stack')
 
   ctx.effect(() => ctx.webServer.registerUpgrade({
     path: '/voice-ayuan/rt',
@@ -266,8 +264,8 @@ export function apply(ctx, config = {}) {
     ctx.provide('voiceCall', {
       status: () => ({ gateway: gateway.status(), tunnel: tunnel.status(), bridge: bridge?.status?.() ?? null }),
       health: () => gateway.health(),
-      start: async () => { await tunnel.start(); return gateway.start() },
-      stop: async () => { await gateway.stop(); tunnel.stop() },
+      start: () => stack.start(),
+      stop: () => stack.stop(),
       diagPaths,
     })
   } catch (error) {
